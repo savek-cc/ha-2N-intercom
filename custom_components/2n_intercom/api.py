@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import json
 from datetime import datetime
 import logging
@@ -43,12 +44,59 @@ class TwoNIntercomAPI:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 connector=aiohttp.TCPConnector(ssl=self.verify_ssl),
+                middlewares=(
+                    aiohttp.DigestAuthMiddleware(
+                        self.username,
+                        self.password,
+                        preemptive=False,
+                    ),
+                ),
             )
         return self._session
 
-    def _get_auth(self) -> aiohttp.BasicAuth:
+    def _get_basic_auth(self) -> aiohttp.BasicAuth:
         """Return HTTP BasicAuth for all requests."""
         return aiohttp.BasicAuth(self.username, self.password)
+
+    @staticmethod
+    def _requires_basic_auth(response: aiohttp.ClientResponse) -> bool:
+        """Return whether a 401 challenge requires HTTP Basic auth."""
+        challenge = response.headers.get("WWW-Authenticate", "")
+        return response.status == 401 and "basic" in challenge.lower()
+
+    @asynccontextmanager
+    async def _async_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_data: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ):
+        """Send a request using Digest auth middleware with Basic fallback."""
+        session = await self.async_get_session()
+        url = f"{self._base_url}{path}"
+        request_kwargs: dict[str, Any] = {}
+        if params is not None:
+            request_kwargs["params"] = params
+        if json_data is not None:
+            request_kwargs["json"] = json_data
+        if headers is not None:
+            request_kwargs["headers"] = headers
+
+        async with session.request(method, url, **request_kwargs) as response:
+            if not self._requires_basic_auth(response):
+                yield response
+                return
+
+        async with session.request(
+            method,
+            url,
+            auth=self._get_basic_auth(),
+            **request_kwargs,
+        ) as response:
+            yield response
 
     async def async_close(self) -> None:
         """Close the API session."""
@@ -105,19 +153,16 @@ class TwoNIntercomAPI:
     async def async_get_directory(self) -> list[dict[str, Any]]:
         """Get directory entries from /api/dir/query."""
         try:
-            session = await self.async_get_session()
-            url = f"{self._base_url}/api/dir/query"
-            
             payload = {
                 "iterator": {"timestamp": 0},
                 "fields": ["name", "callPos.peer"],
             }
 
             async with async_timeout.timeout(API_TIMEOUT):
-                async with session.post(
-                    url,
-                    json=payload,
-                    auth=self._get_auth(),
+                async with self._async_request(
+                    "POST",
+                    "/api/dir/query",
+                    json_data=payload,
                 ) as response:
                     # Check for authentication errors
                     if response.status == 401:
@@ -158,13 +203,10 @@ class TwoNIntercomAPI:
     async def async_get_call_status(self) -> dict[str, Any]:
         """Get current call status from /api/call/status."""
         try:
-            session = await self.async_get_session()
-            url = f"{self._base_url}/api/call/status"
-            
             async with async_timeout.timeout(API_TIMEOUT):
-                async with session.get(
-                    url,
-                    auth=self._get_auth(),
+                async with self._async_request(
+                    "GET",
+                    "/api/call/status",
                 ) as response:
                     # Check for authentication errors
                     if response.status == 401:
@@ -196,13 +238,10 @@ class TwoNIntercomAPI:
     async def async_get_system_info(self) -> dict[str, Any]:
         """Get system info from /api/system/info."""
         try:
-            session = await self.async_get_session()
-            url = f"{self._base_url}/api/system/info"
-
             async with async_timeout.timeout(API_TIMEOUT):
-                async with session.get(
-                    url,
-                    auth=self._get_auth(),
+                async with self._async_request(
+                    "GET",
+                    "/api/system/info",
                 ) as response:
                     if response.status == 401:
                         raise TwoNAuthenticationError(
@@ -243,9 +282,6 @@ class TwoNIntercomAPI:
             True if successful, False otherwise
         """
         try:
-            session = await self.async_get_session()
-            url = f"{self._base_url}/api/switch/ctrl"
-            
             params = {
                 "switch": relay,
                 "action": action,
@@ -255,10 +291,10 @@ class TwoNIntercomAPI:
                 params["duration"] = duration
             
             async with async_timeout.timeout(API_TIMEOUT):
-                async with session.get(
-                    url,
+                async with self._async_request(
+                    "GET",
+                    "/api/switch/ctrl",
                     params=params,
-                    auth=self._get_auth(),
                 ) as response:
                     response.raise_for_status()
                     data = await response.json()
@@ -283,8 +319,6 @@ class TwoNIntercomAPI:
     ) -> bytes | None:
         """Get camera snapshot from /api/camera/snapshot."""
         try:
-            session = await self.async_get_session()
-            url = f"{self._base_url}/api/camera/snapshot"
             params: dict[str, Any] = {"source": "internal"}
             if width is None:
                 width = 640
@@ -294,11 +328,11 @@ class TwoNIntercomAPI:
             params["height"] = height
             
             async with async_timeout.timeout(API_TIMEOUT):
-                async with session.get(
-                    url,
+                async with self._async_request(
+                    "GET",
+                    "/api/camera/snapshot",
                     params=params,
                     headers={"Accept": "image/jpeg"},
-                    auth=self._get_auth(),
                 ) as response:
                     response.raise_for_status()
                     content_type = response.headers.get("Content-Type", "")
