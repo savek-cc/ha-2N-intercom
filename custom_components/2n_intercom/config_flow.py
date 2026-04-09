@@ -58,6 +58,64 @@ def _all_calls_label(language: str) -> str:
     return "All calls"
 
 
+def _read_integration_info(manifest_path: Path) -> tuple[str, str]:
+    """Read integration name and version from the manifest."""
+    with open(manifest_path, encoding="utf-8") as manifest_file:
+        manifest = json.load(manifest_file)
+
+    return manifest.get("name", "2N Intercom"), manifest.get("version", "")
+
+
+async def _async_get_called_peers(data: dict[str, Any]) -> list[str]:
+    """Return list of called peers from directory."""
+    api: TwoNIntercomAPI | None = None
+    try:
+        api = TwoNIntercomAPI(
+            host=data[CONF_HOST],
+            port=data.get(CONF_PORT, DEFAULT_PORT_HTTPS),
+            username=data.get(CONF_USERNAME, ""),
+            password=data.get(CONF_PASSWORD, ""),
+            protocol=data.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
+            verify_ssl=data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+        )
+        directory = await api.async_get_directory()
+
+        users: list[dict[str, Any]] = []
+        if isinstance(directory, list):
+            for entry in directory:
+                if isinstance(entry, dict) and "users" in entry:
+                    users.extend(entry.get("users") or [])
+                elif isinstance(entry, dict):
+                    users.append(entry)
+        elif isinstance(directory, dict):
+            if "users" in directory:
+                users = directory.get("users", [])
+            elif "result" in directory:
+                result = directory.get("result")
+                if isinstance(result, dict):
+                    users = result.get("users", [])
+                elif isinstance(result, list):
+                    users = result
+
+        peers: list[str] = []
+        for user in users:
+            for call_pos in user.get("callPos", []) or []:
+                peer = call_pos.get("peer")
+                if peer and peer not in peers:
+                    peers.append(peer)
+
+        return peers
+    except Exception:  # pylint: disable=broad-except
+        _LOGGER.exception(
+            "Failed to load called peers from dir/query host=%s",
+            data.get(CONF_HOST),
+        )
+        return []
+    finally:
+        if api is not None:
+            await api.async_close()
+
+
 class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for 2N Intercom."""
 
@@ -77,10 +135,12 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         manifest_path = Path(__file__).resolve().parent / "manifest.json"
         try:
-            with open(manifest_path) as f:
-                manifest = json.load(f)
-            self._integration_name = manifest.get("name", "2N Intercom")
-            self._integration_version = manifest.get("version", "")
+            (
+                self._integration_name,
+                self._integration_version,
+            ) = await self.hass.async_add_executor_job(
+                _read_integration_info, manifest_path
+            )
         except (OSError, json.JSONDecodeError):
             self._integration_name = "2N Intercom"
             self._integration_version = ""
@@ -94,6 +154,7 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Handle the initial step - connection settings."""
         errors = {}
+        api: TwoNIntercomAPI | None = None
 
         if user_input is not None:
             # Validate connection
@@ -117,15 +178,33 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
                 # Test connection
                 if not await api.async_test_connection():
+                    _LOGGER.warning(
+                        "Connection test failed host=%s port=%s protocol=%s verify_ssl=%s",
+                        user_input.get(CONF_HOST),
+                        user_input.get(CONF_PORT),
+                        user_input.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
+                        user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+                    )
                     errors["base"] = "cannot_connect"
                 else:
-                    await api.async_close()
                     # Store data and move to device configuration
                     self._data = user_input
-                    return await self.async_step_device()
 
             except Exception:  # pylint: disable=broad-except
+                _LOGGER.exception(
+                    "Connection test exception host=%s port=%s protocol=%s verify_ssl=%s",
+                    user_input.get(CONF_HOST),
+                    user_input.get(CONF_PORT),
+                    user_input.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
+                    user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+                )
                 errors["base"] = "cannot_connect"
+            finally:
+                if api is not None:
+                    await api.async_close()
+
+            if not errors:
+                return await self.async_step_device()
 
         # Default port based on protocol
         default_protocol = (
@@ -134,21 +213,40 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else DEFAULT_PROTOCOL
         )
         default_port = (
-            DEFAULT_PORT_HTTPS
-            if default_protocol == PROTOCOL_HTTPS
-            else DEFAULT_PORT_HTTP
+            user_input.get(CONF_PORT)
+            if user_input is not None and CONF_PORT in user_input
+            else (
+                DEFAULT_PORT_HTTPS
+                if default_protocol == PROTOCOL_HTTPS
+                else DEFAULT_PORT_HTTP
+            )
         )
 
         data_schema = vol.Schema(
             {
-                vol.Required(CONF_HOST): cv.string,
+                vol.Required(
+                    CONF_HOST, default=user_input.get(CONF_HOST, "") if user_input else ""
+                ): cv.string,
                 vol.Required(CONF_PORT, default=default_port): cv.port,
-                vol.Required(CONF_PROTOCOL, default=DEFAULT_PROTOCOL): vol.In(
+                vol.Required(CONF_PROTOCOL, default=default_protocol): vol.In(
                     PROTOCOLS
                 ),
-                vol.Required(CONF_USERNAME): cv.string,
-                vol.Required(CONF_PASSWORD): cv.string,
-                vol.Required(CONF_VERIFY_SSL, default=DEFAULT_VERIFY_SSL): cv.boolean,
+                vol.Required(
+                    CONF_USERNAME,
+                    default=user_input.get(CONF_USERNAME, "") if user_input else "",
+                ): cv.string,
+                vol.Required(
+                    CONF_PASSWORD,
+                    default=user_input.get(CONF_PASSWORD, "") if user_input else "",
+                ): cv.string,
+                vol.Required(
+                    CONF_VERIFY_SSL,
+                    default=(
+                        user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
+                        if user_input
+                        else DEFAULT_VERIFY_SSL
+                    ),
+                ): cv.boolean,
             }
         )
 
@@ -178,7 +276,7 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         await self._ensure_integration_info()
         default_name = self._integration_name or "2N Intercom"
-        peers = await self._async_get_called_peers(self._data)
+        peers = await _async_get_called_peers(self._data)
         called_options = [
             {
                 "label": _all_calls_label(self.hass.config.language),
@@ -410,7 +508,7 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
         errors = {}
         current_data = self._merged_data()
 
-        peers = await self._async_get_called_peers(current_data)
+        peers = await _async_get_called_peers(current_data)
         called_options = [
             {
                 "label": _all_calls_label(self.hass.config.language),
@@ -545,49 +643,3 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
     async def _async_create_entry(self) -> FlowResult:
         """Create the options entry."""
         return self.async_create_entry(title="", data=self._data)
-
-    async def _async_get_called_peers(self, data: dict[str, Any]) -> list[str]:
-        """Return list of called peers from directory."""
-        try:
-            api = TwoNIntercomAPI(
-                host=data[CONF_HOST],
-                port=data.get(CONF_PORT, DEFAULT_PORT_HTTPS),
-                username=data.get(CONF_USERNAME, ""),
-                password=data.get(CONF_PASSWORD, ""),
-                protocol=data.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
-                verify_ssl=data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
-            )
-            directory = await api.async_get_directory()
-            await api.async_close()
-
-            users: list[dict[str, Any]] = []
-            if isinstance(directory, list):
-                for entry in directory:
-                    if isinstance(entry, dict) and "users" in entry:
-                        users.extend(entry.get("users") or [])
-                    elif isinstance(entry, dict):
-                        users.append(entry)
-            elif isinstance(directory, dict):
-                if "users" in directory:
-                    users = directory.get("users", [])
-                elif "result" in directory:
-                    result = directory.get("result")
-                    if isinstance(result, dict):
-                        users = result.get("users", [])
-                    elif isinstance(result, list):
-                        users = result
-
-            peers: list[str] = []
-            for user in users:
-                for call_pos in user.get("callPos", []) or []:
-                    peer = call_pos.get("peer")
-                    if peer and peer not in peers:
-                        peers.append(peer)
-
-            return peers
-        except Exception:  # pylint: disable=broad-except
-            _LOGGER.exception(
-                "Failed to load called peers from dir/query host=%s",
-                data.get(CONF_HOST),
-            )
-            return []
