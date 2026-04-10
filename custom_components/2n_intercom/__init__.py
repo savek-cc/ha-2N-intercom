@@ -52,6 +52,8 @@ def _get_platforms(entry: ConfigEntry) -> list[str]:
     else:
         platforms.append("lock")
 
+    platforms.append("sensor")
+
     return platforms
 
 

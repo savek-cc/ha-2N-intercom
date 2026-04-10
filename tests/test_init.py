@@ -293,6 +293,15 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result)
         self.assertTrue(hass.services.has_service(const_module.DOMAIN, "answer_call"))
         self.assertTrue(hass.services.has_service(const_module.DOMAIN, "hangup_call"))
+        self.assertEqual(
+            hass.config_entries.forwarded,
+            [
+                (
+                    entry.entry_id,
+                    ("camera", "binary_sensor", "lock", "sensor"),
+                )
+            ],
+        )
 
         answer_call = hass.services.handlers[(const_module.DOMAIN, "answer_call")]
         hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
