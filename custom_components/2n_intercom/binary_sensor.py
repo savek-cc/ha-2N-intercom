@@ -20,6 +20,25 @@ from .coordinator import TwoNIntercomCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 
+def _port_exists(
+    payload: dict[str, Any],
+    port_name: str,
+    *,
+    port_type: str | None = None,
+) -> bool:
+    """Return True when the cached port payload contains the requested port."""
+    ports = payload.get("ports") or []
+    for port in ports:
+        if not isinstance(port, dict):
+            continue
+        if port.get("port") != port_name:
+            continue
+        if port_type is not None and port.get("type") != port_type:
+            continue
+        return True
+    return False
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -29,9 +48,16 @@ async def async_setup_entry(
     coordinator: TwoNIntercomCoordinator = hass.data[DOMAIN][config_entry.entry_id][
         "coordinator"
     ]
-    
+    entities: list[BinarySensorEntity] = [TwoNIntercomDoorbell(coordinator, config_entry)]
+
+    if _port_exists(coordinator.io_caps, "input1", port_type="input") and _port_exists(
+        coordinator.io_status,
+        "input1",
+    ):
+        entities.append(TwoNIntercomInput1Sensor(coordinator, config_entry))
+
     async_add_entities(
-        [TwoNIntercomDoorbell(coordinator, config_entry)],
+        entities,
         True,
     )
 
@@ -106,6 +132,55 @@ class TwoNIntercomDoorbell(CoordinatorEntity[TwoNIntercomCoordinator], BinarySen
                 attributes["call_direction"] = call_status["direction"]
         
         return attributes
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        return self.coordinator.last_update_success
+
+
+class TwoNIntercomInput1Sensor(
+    CoordinatorEntity[TwoNIntercomCoordinator], BinarySensorEntity
+):
+    """Representation of the real IO input 1 state."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Input 1"
+
+    def __init__(
+        self,
+        coordinator: TwoNIntercomCoordinator,
+        config_entry: ConfigEntry,
+    ) -> None:
+        """Initialize the input sensor."""
+        super().__init__(coordinator)
+
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_input1"
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        """Return device information about this input sensor."""
+        name = self._config_entry.options.get(
+            "name",
+            self._config_entry.data.get("name", "2N Intercom"),
+        )
+        return self.coordinator.get_device_info(self._config_entry.entry_id, name)
+
+    @staticmethod
+    def _is_port_on(io_status: dict[str, Any]) -> bool:
+        ports = io_status.get("ports") or []
+        for port in ports:
+            if not isinstance(port, dict):
+                continue
+            if port.get("port") == "input1":
+                return port.get("state") in (1, True, "1", "on", "true")
+        return False
+
+    @property
+    def is_on(self) -> bool:
+        """Return true if input 1 is active."""
+        return self._is_port_on(self.coordinator.io_status)
 
     @property
     def available(self) -> bool:
