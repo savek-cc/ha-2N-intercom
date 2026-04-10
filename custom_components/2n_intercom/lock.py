@@ -31,7 +31,7 @@ async def async_setup_entry(
     coordinator: TwoNIntercomCoordinator = hass.data[DOMAIN][config_entry.entry_id][
         "coordinator"
     ]
-    
+
     door_type = config_entry.options.get(
         CONF_DOOR_TYPE, config_entry.data.get(CONF_DOOR_TYPE)
     )
@@ -67,7 +67,7 @@ class TwoNIntercomLock(CoordinatorEntity[TwoNIntercomCoordinator], LockEntity):
     ) -> None:
         """Initialize the lock."""
         super().__init__(coordinator)
-        
+
         self._config_entry = config_entry
         self._door_type = door_type
         self._attr_unique_id = f"{config_entry.entry_id}_lock"
@@ -78,6 +78,25 @@ class TwoNIntercomLock(CoordinatorEntity[TwoNIntercomCoordinator], LockEntity):
         # Door -> no device class (default door lock)
         if door_type == DOOR_TYPE_GATE:
             self._attr_device_class = "gate"
+
+    def _cached_is_locked(self) -> bool | None:
+        """Return the cached lock state for relay 1 when available."""
+        switches = self.coordinator.switch_status.get("switches")
+        if not isinstance(switches, list):
+            return None
+
+        for switch in switches:
+            if not isinstance(switch, dict):
+                continue
+            if switch.get("switch") != 1:
+                continue
+            active = switch.get("active")
+            held = switch.get("held")
+            if isinstance(active, bool) or isinstance(held, bool):
+                return not bool(active) and not bool(held)
+            return None
+
+        return None
 
     @property
     def device_info(self) -> dict[str, Any]:
@@ -91,6 +110,9 @@ class TwoNIntercomLock(CoordinatorEntity[TwoNIntercomCoordinator], LockEntity):
     @property
     def is_locked(self) -> bool:
         """Return true if lock is locked."""
+        cached_is_locked = self._cached_is_locked()
+        if cached_is_locked is not None:
+            return cached_is_locked
         return self._attr_is_locked
 
     async def async_lock(self, **kwargs: Any) -> None:
@@ -102,7 +124,7 @@ class TwoNIntercomLock(CoordinatorEntity[TwoNIntercomCoordinator], LockEntity):
         """Unlock the lock."""
         # Trigger relay 1 (default relay for legacy lock)
         success = await self.coordinator.async_trigger_relay(relay=1, duration=2000)
-        
+
         if success:
             self._attr_is_locked = False
             self.async_write_ha_state()
