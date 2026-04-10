@@ -50,13 +50,14 @@ This document outlines the complete architecture for a Home Assistant custom int
 │                       2N IP Intercom                             │
 │                                                                  │
 │  HTTP API:                                                       │
-│  - /api/dir/query       (directory, caller info)                │
+│  - /api/dir/query       (optional peer lookup during config)    │
 │  - /api/call/status     (call state, ringing)                   │
 │  - /api/switch/ctrl     (relay control)                         │
-│  - /api/camera/snapshot (JPEG snapshot)                         │
+│  - /api/camera/snapshot (JPEG snapshot, MJPEG on supporting     │
+│                           devices)                              │
 │                                                                  │
 │  RTSP:                                                          │
-│  - rtsp://user:pass@ip:port/stream                             │
+│  - rtsp://user:pass@ip:rtsp_port/h264_stream                   │
 │    (H.264 video + AAC audio)                                   │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -90,7 +91,7 @@ custom_components/2n_intercom/
 
 **Responsibilities**:
 - HTTP/HTTPS connection management
-- Authentication (Basic Auth)
+- Authentication (Digest with Basic fallback)
 - API endpoint abstraction
 - Error handling and retry logic
 - Session management
@@ -104,18 +105,18 @@ class TwoNIntercomAPI:
     async def async_get_call_status() -> dict
     async def async_switch_control(relay: int, action: str) -> bool
     async def async_get_snapshot() -> bytes
-    def get_rtsp_url(profile: str = "default") -> str
+    def get_rtsp_url() -> str
 ```
 
 **API Endpoint Mapping**:
 
 | 2N API Endpoint | Method | Purpose | Returns |
 |----------------|--------|---------|---------|
-| `/api/dir/query` | GET | Get directory entries | JSON: caller names, numbers |
+| `/api/dir/query` | POST | Optional peer lookup during config | JSON: caller names, numbers |
 | `/api/call/status` | GET | Get call/ring status | JSON: state, caller_id, button |
 | `/api/switch/ctrl?switch={n}&action={action}` | GET | Control relay | JSON: success status |
-| `/api/camera/snapshot` | GET | Get JPEG snapshot | Binary: JPEG image |
-| RTSP stream | - | Video stream URL | rtsp://host:port/stream |
+| `/api/camera/snapshot` | GET | Get JPEG snapshot; MJPEG on supporting devices | Binary: JPEG image or MJPEG stream |
+| RTSP stream | - | Video stream URL | rtsp://host:rtsp_port/h264_stream |
 
 ### 3. DataUpdateCoordinator (`coordinator.py`)
 
@@ -170,8 +171,8 @@ class TwoNIntercomData:
 **Validation During Setup**:
 1. Test HTTP connection
 2. Verify credentials with `/api/call/status` call
-3. Test camera snapshot if enabled
-4. Validate RTSP URL format
+3. Do not validate camera snapshot during setup yet
+4. Treat `camera/caps` as a later capability source, not a current setup-time validation step
 
 **Options Flow**:
 - Allow changing all configuration except IP/port
@@ -183,17 +184,17 @@ class TwoNIntercomData:
 **Entity**: `camera.{device_name}_camera`
 
 **Features**:
-- Live RTSP H.264 stream
-- Snapshot via `/api/camera/snapshot`
+- Still image via `/api/camera/snapshot`
+- RTSP live stream through the current camera entity when the device exposes it
+- MJPEG via `/api/camera/snapshot?...&fps=<n>` is a tested device capability and roadmap direction for RTSP-unavailable devices
 - HomeKit-compatible streaming
-- Motion detection (via doorbell events)
 
 **Implementation Strategy**:
 
-**RTSP Streaming**:
-- Use Home Assistant's generic camera stream component
-- Provide RTSP URL: `rtsp://{username}:{password}@{ip}:{port}/{profile}`
-- Support stream profile configuration
+**Streaming**:
+- Use Home Assistant's generic camera stream component when RTSP is available
+- Provide RTSP URL only for devices that expose it: `rtsp://{username}:{password}@{ip}:{rtsp_port}/h264_stream`
+- Keep MJPEG as a future fallback path for RTSP-unavailable devices
 - WebRTC: Future enhancement via go2rtc integration
 
 **Snapshot**:
@@ -205,9 +206,10 @@ class TwoNIntercomData:
 - Mark as `supported_features = CameraEntityFeature.STREAM`
 - Enable doorbell button via HomeKit service
 - Link to binary_sensor for ring events
+- Treat `camera/caps` as the source of truth for supported JPEG resolutions
 
 **WebRTC Future Path**:
-- Phase 1: Use RTSP with HomeKit (current)
+- Phase 1: Use snapshot and optional RTSP (current)
 - Phase 2: Add go2rtc as optional dependency
 - Phase 3: Provide WebRTC stream alongside RTSP
 - Phase 4: Make WebRTC default with RTSP fallback
@@ -384,13 +386,13 @@ PLATFORMS = ["camera", "binary_sensor", "switch", "cover", "lock"]
 **Implementation**:
 - Camera entity with `CameraEntityFeature.STREAM`
 - Binary sensor with `device_class: doorbell`
-- HomeKit bridge automatically links them
+- HomeKit bridge requires YAML linking via `linked_doorbell_sensor`
 - Ring events trigger HomeKit doorbell notification
 - Snapshot shown on ring
 
 **Configuration**:
-- No special configuration needed
-- HomeKit bridge automatically detects
+- HomeKit bridge must include the camera entity and link the doorbell sensor in YAML
+- Do not include the doorbell sensor in any other HomeKit bridge
 - Accessory type: "Video Doorbell"
 
 ### Door vs Gate
@@ -416,10 +418,12 @@ homekit:
   - filter:
       include_domains:
         - camera
-        - binary_sensor
         - cover
       include_entities:
         - switch.front_door  # If using switch for door
+    entity_config:
+      camera.2n_intercom_camera:
+        linked_doorbell_sensor: binary_sensor.2n_intercom_doorbell
 ```
 
 ## Error Handling & Reconnect Logic
@@ -467,22 +471,25 @@ except APIError as err:
 
 ## RTSP vs WebRTC
 
-### Current Approach: RTSP
+### Current Approach: Snapshot With Optional RTSP
 
 **Pros**:
-- Simple integration
-- Standard protocol
-- Works with all 2N intercoms
+- Snapshot works without RTSP licensing
+- Matches the current camera entity behavior
+- RTSP remains available on models that expose it
 - HomeKit compatible
 - No additional dependencies
 
 **Cons**:
-- Higher latency (2-4 seconds)
-- More bandwidth usage
-- Less efficient encoding
+- No MJPEG fallback in the current camera entity yet
+- RTSP is unavailable on devices without an RTSP Server license
+- Higher latency than WebRTC
+- Support varies by device capability
 
 **Implementation**:
-- Use RTSP URL directly
+- Use the snapshot endpoint directly for still images
+- Use RTSP from `stream_source()` when the device exposes it
+- Treat verified MJPEG capability as a roadmap input for future fallback work
 - Let Home Assistant handle stream processing
 - Compatible with HomeKit via HAP protocol
 
@@ -502,21 +509,25 @@ except APIError as err:
 
 **Migration Path**:
 
-1. **Phase 1 (Current)**: RTSP only
-   - Simple, reliable
-   - Works everywhere
+1. **Phase 1 (Current)**: Snapshot and optional RTSP
+   - Matches the current fork behavior
+   - Works today on devices that expose RTSP
 
-2. **Phase 2**: Add go2rtc support
+2. **Phase 2**: Add MJPEG fallback for RTSP-unavailable devices
+   - Use `camera/caps` for resolution selection
+   - Respect the tested `fps` range of `1..15`
+
+3. **Phase 3**: Add go2rtc support
    - Add `go2rtc` to manifest requirements
    - Detect if go2rtc is available
    - Use WebRTC if available, RTSP fallback
 
-3. **Phase 3**: WebRTC preferred
+4. **Phase 4**: WebRTC preferred
    - Recommend go2rtc in documentation
    - Use WebRTC by default
    - Keep RTSP as fallback
 
-4. **Phase 4**: WebRTC only (future)
+5. **Phase 5**: WebRTC only (future)
    - When WebRTC is standard in HA
    - Remove RTSP code
    - Simplify implementation
@@ -544,7 +555,7 @@ class TwoNIntercomCamera(Camera):
 - Use coordinator to centralize polling
 - Don't poll from individual entities
 
-### 2. RTSP Stream Handling
+### 2. Camera Stream Handling
 
 **Pitfall**: Multiple stream requests can crash some intercoms
 
@@ -553,6 +564,7 @@ class TwoNIntercomCamera(Camera):
 - Don't create direct ffmpeg processes
 - Use camera entity's built-in streaming
 - One active stream at a time
+- Prefer `camera/caps` for supported JPEG resolutions
 
 ### 3. Relay Control
 
@@ -650,8 +662,9 @@ class TwoNIntercomCamera(Camera):
 
 ### Phase 3: Camera (Week 2)
 - Implement camera.py
-- RTSP streaming
 - Snapshot support
+- MJPEG fallback
+- RTSP when available
 - Test HomeKit integration
 
 ### Phase 4: Doorbell (Week 2)
@@ -675,7 +688,8 @@ class TwoNIntercomCamera(Camera):
 ## Success Criteria
 
 ### Functional Requirements
-- ✅ Camera streams via RTSP
+- ✅ Camera provides JPEG snapshots and RTSP in the current fork
+- ✅ MJPEG fallback remains a roadmap item for RTSP-unavailable devices
 - ✅ Snapshots work reliably
 - ✅ Doorbell events trigger correctly
 - ✅ Relay control works for all configured relays
@@ -710,7 +724,7 @@ This architecture provides a robust, scalable foundation for 2N Intercom integra
 
 Key architectural decisions:
 1. **DataUpdateCoordinator** for centralized state management
-2. **RTSP first**, WebRTC-ready architecture
+2. **Snapshot first with optional RTSP today**, MJPEG-aware roadmap
 3. **Platform-based** entity organization
 4. **Flexible relay** configuration (switch vs cover)
 5. **HomeKit compatibility** as first-class citizen

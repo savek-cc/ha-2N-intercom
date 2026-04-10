@@ -1,12 +1,13 @@
 # ha-2N-intercom
 
-Home Assistant custom integration for 2N IP Intercom systems with comprehensive features and HomeKit support.
+Home Assistant custom integration for 2N IP Intercom systems with camera, doorbell, relay, and HomeKit support.
 
 ## Features
 
 ### 🎥 Camera
-- **Live RTSP video streaming** with H.264 codec
-- **Snapshot support** via 2N HTTP API
+- **Still image via JPEG snapshot**
+- **Live video via RTSP** on devices that expose it
+- **Verified device baseline:** MJPEG is available from compatible 2N devices when RTSP is unavailable
 - **HomeKit-compatible** video streaming
 
 ### 🔔 Doorbell
@@ -26,7 +27,7 @@ Home Assistant custom integration for 2N IP Intercom systems with comprehensive 
   - Gates: Exposed as garage door openers
 
 ### ⚙️ Configuration
-- **Full UI-based configuration** (no YAML required)
+- **Full UI-based integration setup** (HomeKit doorbell linking still requires YAML)
 - **Multi-step setup wizard**:
   1. Connection settings (IP, port, protocol, credentials)
   2. Device features (camera, doorbell)
@@ -39,6 +40,31 @@ Home Assistant custom integration for 2N IP Intercom systems with comprehensive 
 - Camera with doorbell button
 - Lock or garage door opener based on configuration
 - Natural Siri voice commands
+- Home Assistant automations can drive downstream workflows such as app notifications or KNX door opening; those are not features of this fork.
+
+## Capability Matrix
+
+| Category | Status | Notes |
+|----------|--------|-------|
+| Core supported now | JPEG snapshot, RTSP stream source on devices that expose it, doorbell ring detection, relay control, HomeKit bridge mapping, and HTTP/HTTPS setup | Current camera entity uses snapshots plus RTSP on RTSP-capable models |
+| Planned next | Wire the verified MJPEG capability into the camera entity for RTSP-unavailable devices, improve capability detection from `camera/caps`, and add more Home Assistant usage examples | MJPEG baseline verified on a 2N IP Verso running firmware `2.50.0.76.2` |
+| Device-license-dependent but not planned | Automation, Audio Test, NFC, Noise Detection, SMTP, FTP, SNMP, TR069, Lift Control | Only available when the device license exposes them, but this fork is not planning feature work here |
+| Irrelevant for single-family-house deployment | Multi-tenant directory UX, keypad workflow, lift workflow, multi-button routing UI | Not needed for the one-bell house baseline |
+
+### Camera Support Baseline
+
+Verified on a 2N IP Verso with firmware `2.50.0.76.2`:
+
+- RTSP Server license: `NO`
+- JPEG snapshot works without `fps`
+- MJPEG works via `/api/camera/snapshot?...&fps=<n>` over both HTTP and HTTPS
+- Valid `fps` values are `1..15`
+- `fps >= 16` returns error code `12`
+- Supported JPEG resolutions should be taken from `camera/caps`
+- Supported resolutions observed from `camera/caps`:
+  `176x144`, `320x240`, `352x288`, `640x480`, `800x600`, `1280x960`, `160x120`, `352x272`, `480x272`, `1024x600`, `1280x720`, `640x360`
+
+RTSP is optional and only applies to devices that expose it. On the tested IP Verso baseline, the device itself provides live video via MJPEG when RTSP is unavailable. The current fork still uses `stream_source()` for RTSP-capable models and does not yet expose an MJPEG live-view fallback from the camera entity.
 
 ## Architecture
 
@@ -175,10 +201,12 @@ Result:
 | Endpoint | Purpose | Platform |
 |----------|---------|----------|
 | `/api/call/status` | Monitor doorbell rings and call state | binary_sensor |
-| `/api/dir/query` | Get caller directory information | binary_sensor |
 | `/api/switch/ctrl` | Control relays (open door/gate) | switch, cover |
-| `/api/camera/snapshot` | Get JPEG snapshot | camera |
-| RTSP stream | Live video streaming | camera |
+| `/api/camera/snapshot` | Get JPEG snapshot; the same endpoint also offers MJPEG live video via `fps` on supporting devices | camera |
+| RTSP stream | Live video streaming when the device exposes RTSP | camera |
+
+On the tested 2N IP Verso baseline, the next-priority runtime API families are `log/*`, `call/*`, `switch/*`, `io/*`, and `phone/*`.
+The config flow can also use directory lookup during setup when peer data is available.
 
 ## HomeKit Integration
 
@@ -248,9 +276,10 @@ Notes:
 **Symptoms:** Camera entity exists but no video
 
 **Solutions:**
-1. Verify RTSP stream is enabled on 2N intercom
-2. Test RTSP URL manually: `rtsp://username:password@ip:554/h264_stream`
-3. Check Home Assistant logs for stream errors
+1. Test the snapshot endpoint without `fps` first.
+2. If RTSP is not licensed or not exposed by the device, verify the device's MJPEG capability via `/api/camera/snapshot?...&fps=<n>`.
+3. For MJPEG, keep `fps` between `1` and `15`.
+4. The current fork still exposes RTSP from the camera entity; if your device has no RTSP path, live video needs the planned MJPEG camera-entity fallback.
 
 ### Doorbell Not Triggering
 
@@ -335,10 +364,11 @@ Contributions are welcome! Please:
 ### 1.0.1 (Current)
 - Fix HomeKit entity exposure when relays are configured
 - Ensure relay entities load from options
+- Document current snapshot/RTSP behavior and the verified MJPEG device baseline
 
 ### 1.0.0
 - Initial public release
-- Camera platform with RTSP streaming
+- Camera platform with JPEG snapshot and RTSP stream source
 - Doorbell binary sensor
 - Switch platform for doors
 - Cover platform for gates

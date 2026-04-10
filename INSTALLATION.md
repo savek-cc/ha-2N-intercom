@@ -35,68 +35,78 @@ After copying the files, restart Home Assistant to load the integration.
 ![Setup Wizard](docs/setup_wizard.png)
 
 Fields:
-- **Name**: Enter a name for your device (e.g., "Front Door", "Garden Gate")
-- **Door Type**: Select the type:
-  - **Door** (Dveře): For regular doors - will appear as a door lock in HomeKit
-  - **Gate** (Vrata): For gates/garage doors - will appear as a garage door opener in HomeKit
+- **Connection step**: Host, port, protocol, username, password, SSL verification
+- **Device step**: Name, camera toggle, doorbell toggle, relay count, optional called peer
+- **Relay steps**: Shown only when relays are configured; choose door/gate type, relay number, and pulse duration for each relay
 
 Example configurations:
 
-**For a front door:**
+**Connection + device example:**
 ```
+Host: 192.168.1.100
+Protocol: HTTP
 Name: Front Door
-Door Type: Door
+Enable Camera: Yes
+Enable Doorbell: Yes
+Relay Count: 1
+Called Peer: All calls
 ```
 
-**For a gate:**
+**Relay example:**
 ```
-Name: Garden Gate
-Door Type: Gate
+Relay 1: Front Door
+Type: Door
+Relay Number: 1
+Pulse Duration: 2000
 ```
 
 ### 5. Verify in Home Assistant
 
 After setup, you should see:
-- A lock entity named `lock.<your_device_name>`
+- A camera entity named `camera.<your_device_name>_camera` when camera is enabled
+- A doorbell binary sensor named `binary_sensor.<your_device_name>_doorbell` when doorbell is enabled
+- Switch entities for door relays and cover entities for gate relays
+- A legacy lock entity named `lock.<your_device_name>_lock` only when no relays are configured
 - Device information in the Devices view
-- The entity will show as "Locked" by default
 
 ### 6. HomeKit Integration
 
 If you have the HomeKit integration enabled in Home Assistant:
 
-1. The lock entity will automatically be available to HomeKit
+1. The relevant entities will be available to HomeKit based on your bridge filter and YAML link configuration
 2. Open the Home app on your iOS/macOS device
-3. You should see your door/gate with the appropriate icon:
-   - **Door type**: Lock icon 🔒
-   - **Gate type**: Garage door icon 🏠
+3. You should see the door/gate with the appropriate icon:
+   - **Door relay**: Lock or switch icon depending on your HomeKit bridge setup
+   - **Gate relay**: Garage door icon 🏠
 
 ### 7. Using the Lock
 
 **In Home Assistant:**
-- Click the lock entity to unlock
-- Click again to lock
-- Use the "Open" button to trigger the door/gate opening
+- Use the camera entity for snapshots and RTSP preview
+- Use the doorbell binary sensor for automations and alerts
+- Click a door relay switch to trigger the opening pulse
+- Click a gate cover to open or close the gate
+- Use the legacy lock entity only if no relays are configured
 
 **In HomeKit:**
-- For doors: Tap to lock/unlock
+- For doors: Tap to lock/unlock or trigger the mapped switch
 - For gates: Tap to open/close
 
 **With Siri:**
 - "Hey Siri, unlock the front door"
 - "Hey Siri, open the garden gate"
 
-## Changing Door Type
+## Changing Device Or Relay Settings
 
-To change the door type after initial setup:
+To change the device or relay behavior after initial setup:
 
 1. Go to **Settings** → **Devices & Services**
 2. Find the **2N Intercom** integration
 3. Click **Configure**
-4. Select the new **Door Type**
+4. Update the device options or relay type/duration settings
 5. Click **Submit**
 
-The integration will reload with the new configuration, and the HomeKit accessory type will update accordingly.
+The integration will reload with the new configuration, and the HomeKit accessory mapping will update accordingly. If no relays are configured, the legacy lock path still uses the door/gate type for HomeKit behavior.
 
 ## Troubleshooting
 
@@ -107,12 +117,12 @@ The integration will reload with the new configuration, and the HomeKit accessor
 
 ### HomeKit not showing the device
 - Ensure HomeKit integration is set up in Home Assistant
-- Check that the lock entity is not excluded from HomeKit
+- Check that the camera, doorbell, and relay entities are included in the HomeKit bridge as intended
 - Try restarting the HomeKit bridge
 
 ### Wrong accessory type in HomeKit
-- Check the door type configuration in the integration options
-- Change the door type and reload the integration
+- Check the relay type or legacy no-relay lock configuration in the integration options
+- Change the affected setting and reload the integration
 - Restart the HomeKit bridge
 
 ## Advanced Configuration
@@ -120,7 +130,7 @@ The integration will reload with the new configuration, and the HomeKit accessor
 ### Ringing Account Filter
 
 If you have multiple buttons, you can limit doorbell events to a single
-account by selecting **Ringing account (peer)** in options.
+account by selecting **Ringing account (peer)** in options. This is an optional runtime filter and can also use the configuration-time peer list when the device exposes it.
 
 ### Multiple Doors/Gates
 
@@ -128,9 +138,9 @@ You can add multiple instances of the integration for different doors:
 
 1. Add the integration again
 2. Give it a different name
-3. Select the appropriate door type
+3. Configure the appropriate device and relay model for that instance
 
-Each instance will create a separate lock entity.
+Each instance will create its own camera, doorbell, and relay entities; if an instance has no relays, it will expose the legacy lock entity instead.
 
 ### Automation Examples
 
@@ -144,9 +154,9 @@ automation:
         zone: zone.home
         event: enter
     action:
-      - service: lock.unlock
+      - service: switch.turn_on
         target:
-          entity_id: lock.front_door
+          entity_id: switch.front_door
 ```
 
 **Open gate at specific times:**
@@ -157,20 +167,25 @@ automation:
       - platform: time
         at: "07:00:00"
     action:
-      - service: lock.open
+      - service: cover.open_cover
         target:
-          entity_id: lock.garden_gate
+          entity_id: cover.garden_gate
 ```
+
+If an instance has no relays configured, use the legacy `lock.*` entity instead.
 
 ## Development Status
 
-This is a basic implementation that provides:
-- ✅ Door type selection
+This implementation currently provides:
+- ✅ Connection, device, and relay config flow
 - ✅ HomeKit integration
-- ✅ Lock entity with open support
-- ⏳ Real 2N API integration (planned)
-- ⏳ Door state sensors (planned)
-- ⏳ Video doorbell support (planned)
+- ✅ Camera entity with snapshot and RTSP stream source
+- ✅ Doorbell binary sensor
+- ✅ Relay control through the 2N API
+- ✅ Switch and cover entities for configured relays
+- ✅ Legacy lock entity when no relays are configured
+
+Downstream Home Assistant automations can turn these entities into app notifications or KNX door-opening workflows, but those are not fork features.
 
 ## Support
 

@@ -12,13 +12,58 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .api import CameraTransportInfo
+from .const import (
+    DEFAULT_LIVE_VIEW_MODE,
+    DOMAIN,
+    LIVE_VIEW_MODE_MJPEG,
+    LIVE_VIEW_MODE_RTSP,
+)
 from .coordinator import TwoNIntercomCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
 # Cache snapshots for 1 second to avoid excessive API calls
 SNAPSHOT_CACHE_DURATION = timedelta(seconds=1)
+
+
+def _transport_has_live_view(transport_info: CameraTransportInfo) -> bool:
+    """Return whether the selected transport yields a live-view URL."""
+    if not transport_info.resolved:
+        return False
+    return transport_info.selected_mode in (LIVE_VIEW_MODE_RTSP, LIVE_VIEW_MODE_MJPEG)
+
+
+def get_stream_source_for_transport(
+    api,
+    transport_info: CameraTransportInfo,
+) -> str | None:
+    """Build a stream source URL for the chosen transport."""
+    if not _transport_has_live_view(transport_info):
+        return None
+
+    if transport_info.selected_mode == LIVE_VIEW_MODE_RTSP:
+        return api.get_rtsp_url_with_credentials()
+
+    if transport_info.selected_mode == LIVE_VIEW_MODE_MJPEG:
+        return api.build_mjpeg_url(
+            width=transport_info.mjpeg_width,
+            height=transport_info.mjpeg_height,
+            fps=transport_info.mjpeg_fps,
+            source=transport_info.source,
+            include_auth=not transport_info.mjpeg_public_url_available,
+        )
+
+    return None
+
+
+def get_supported_features_for_transport(
+    transport_info: CameraTransportInfo,
+) -> CameraEntityFeature:
+    """Return the camera feature flags for the selected transport."""
+    if _transport_has_live_view(transport_info):
+        return CameraEntityFeature.STREAM
+    return CameraEntityFeature(0)
 
 
 async def async_setup_entry(
@@ -42,8 +87,6 @@ class TwoNIntercomCamera(CoordinatorEntity[TwoNIntercomCoordinator], Camera):
 
     _attr_has_entity_name = True
     _attr_name = "Camera"
-    _attr_supported_features = CameraEntityFeature.STREAM
-
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
@@ -57,6 +100,21 @@ class TwoNIntercomCamera(CoordinatorEntity[TwoNIntercomCoordinator], Camera):
         self._attr_unique_id = f"{config_entry.entry_id}_camera"
         self._last_snapshot: bytes | None = None
         self._last_snapshot_time: float = 0
+        self._transport_info = coordinator.api.camera_transport_info
+
+    async def async_added_to_hass(self) -> None:
+        """Schedule transport detection after the entity is added."""
+        await super().async_added_to_hass()
+        if self.hass is not None:
+            self.hass.async_create_task(self._async_refresh_transport_info())
+
+    async def _async_refresh_transport_info(self) -> CameraTransportInfo:
+        """Refresh cached transport info from the API."""
+        self._transport_info = await self.coordinator.api.async_get_camera_transport_info(
+            requested_mode=DEFAULT_LIVE_VIEW_MODE,
+        )
+        self.async_write_ha_state()
+        return self._transport_info
 
     @property
     def device_info(self) -> dict[str, Any]:
@@ -87,6 +145,35 @@ class TwoNIntercomCamera(CoordinatorEntity[TwoNIntercomCoordinator], Camera):
         """Return the camera model."""
         return "IP Intercom"
 
+    @property
+    def supported_features(self) -> CameraEntityFeature:
+        """Return supported features based on the selected live-view transport."""
+        return get_supported_features_for_transport(self._transport_info)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose camera capability and transport details."""
+        transport_info = self._transport_info
+        return {
+            "live_view_requested_mode": transport_info.requested_mode,
+            "live_view_selected_mode": transport_info.selected_mode,
+            "live_view_resolved": transport_info.resolved,
+            "live_view_available": transport_info.live_view_available,
+            "rtsp_available": transport_info.rtsp_available,
+            "mjpeg_available": transport_info.mjpeg_available,
+            "mjpeg_public_url_available": transport_info.mjpeg_public_url_available,
+            "jpeg_snapshot_available": transport_info.jpeg_snapshot_available,
+            "camera_source": transport_info.source,
+            "mjpeg_width": transport_info.mjpeg_width,
+            "mjpeg_height": transport_info.mjpeg_height,
+            "mjpeg_fps": transport_info.mjpeg_fps,
+            "camera_sources": list(transport_info.capabilities.sources),
+            "camera_resolutions": [
+                resolution.as_string()
+                for resolution in transport_info.capabilities.jpeg_resolutions
+            ],
+        }
+
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
@@ -113,8 +200,8 @@ class TwoNIntercomCamera(CoordinatorEntity[TwoNIntercomCoordinator], Camera):
 
     async def stream_source(self) -> str | None:
         """Return the source of the stream."""
-        # Return RTSP URL for streaming
-        return self.coordinator.api.get_rtsp_url_with_credentials()
+        transport_info = await self._async_refresh_transport_info()
+        return get_stream_source_for_transport(self.coordinator.api, transport_info)
 
     @property
     def available(self) -> bool:

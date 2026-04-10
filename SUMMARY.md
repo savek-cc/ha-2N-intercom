@@ -2,7 +2,7 @@
 
 ## Overview
 
-This implementation adds a complete Home Assistant custom integration for 2N Intercom systems with door type selection and HomeKit bridge support.
+This implementation adds a Home Assistant custom integration for 2N Intercom systems with connection, device, and relay setup flow plus HomeKit bridge support, validated on the 2N IP Verso baseline used for the single-family-house deployment target.
 
 ## Problem Statement (Czech)
 > "zaměřme se ted na otevírani dveří, chtěl bych aby si uživatel mohl vybrat typ dveří jestli jde o vrata nebo dveře a aby se to potom propisovalo do homekit bridge"
@@ -12,23 +12,32 @@ This implementation adds a complete Home Assistant custom integration for 2N Int
 
 ## Solution Implemented
 
-### 1. Door Type Selection ✓
-Users can select between two door types during setup:
-- **Dveře (Door)**: Standard door lock
-- **Vrata (Gate)**: Gate/garage door
+### 1. Door/Gate Mapping ✓
+Users can express door/gate behavior through the current relay model:
+- **Door relay**: switch-style control for regular doors
+- **Gate relay**: cover-style control for gates/garage doors
+- **Legacy no-relay path**: fallback lock entity keeps door/gate semantics for HomeKit compatibility
 
 ### 2. HomeKit Bridge Integration ✓
-The door type selection propagates to HomeKit:
-- **Door type**: Exposed as a Lock accessory in HomeKit
-- **Gate type**: Exposed as a Garage Door Opener accessory in HomeKit
+The configured entity model propagates to HomeKit:
+- **Door relay**: Exposed according to the included entity type and bridge mapping
+- **Gate relay**: Exposed as a Garage Door Opener accessory in HomeKit
+- **Legacy lock path**: Still maps door/gate semantics for no-relay setups
 
 ### 3. Key Features
-- ✅ Configuration UI with door type dropdown
-- ✅ Options flow to change door type after setup
-- ✅ Lock entity with open support
-- ✅ HomeKit device class mapping
+- ✅ Connection, device, and relay setup flow
+- ✅ Options flow for connection, device, and relay updates
+- ✅ Camera, doorbell, switch, and cover platforms
+- ✅ Legacy lock entity with open support for no-relay setups
+- ✅ HomeKit entity mapping
 - ✅ Czech and English translations
 - ✅ Proper entity lifecycle management
+
+### 4. Current Flow and Entity Model ✓
+- Connection step: host, port, protocol, credentials, SSL verification
+- Device step: name, camera toggle, doorbell toggle, relay count, optional called peer
+- Relay steps: shown only when relays are configured
+- Entity model: camera and doorbell platforms, switch/cover relays, and a legacy lock entity only when no relays are configured
 
 ## Files Created
 
@@ -47,8 +56,8 @@ The door type selection propagates to HomeKit:
    - Door type definitions
 
 4. **custom_components/2n_intercom/config_flow.py**
-   - Configuration UI flow
-   - Door type selection
+   - Connection, device, and relay configuration flow
+   - Optional called peer selection
    - Options flow for updates
 
 5. **custom_components/2n_intercom/lock.py**
@@ -96,10 +105,10 @@ The door type selection propagates to HomeKit:
 
 ## Technical Implementation
 
-### Door Type → HomeKit Mapping
+### Door/Gate → HomeKit Mapping
 
 ```python
-# In lock.py
+# Legacy no-relay path in lock.py
 if door_type == DOOR_TYPE_GATE:
     self._attr_device_class = "gate"  # → HomeKit Garage Door Opener
 # else: no device_class → HomeKit Lock
@@ -110,13 +119,17 @@ if door_type == DOOR_TYPE_GATE:
 ```
 User adds integration
     ↓
-Select name and door type
+Enter connection settings
     ↓
-Integration creates lock entity with proper device_class
+Choose device settings (name, camera, doorbell, relay count, optional called peer)
     ↓
-HomeKit bridge discovers entity
+Configure relays when present
     ↓
-Exposes to HomeKit with correct accessory type
+Integration creates camera, doorbell, and relay entities
+    ↓
+Legacy lock entity is used only when no relays are configured
+    ↓
+HomeKit bridge exposes the included entities with the matching accessory type
 ```
 
 ### Options Update Flow
@@ -124,11 +137,11 @@ Exposes to HomeKit with correct accessory type
 ```
 User opens integration options
     ↓
-Changes door type
+Changes connection, device, or relay settings
     ↓
 Integration reloads
     ↓
-Lock entity recreated with new device_class
+Entities are recreated with the updated relay/device model
     ↓
 HomeKit accessory updates
 ```
@@ -166,29 +179,31 @@ To test this implementation in a real Home Assistant environment:
 3. **Add the integration**
    - Go to Settings → Devices & Services
    - Add "2N Intercom"
-   - Select door type
+   - Complete the connection, device, and relay steps
 
 4. **Verify entity creation**
-   - Check that `lock.<device_name>` entity exists
-   - Verify device_class is correct
+   - Check that `camera.<device_name>_camera` exists when camera is enabled
+   - Check that `binary_sensor.<device_name>_doorbell` exists when doorbell is enabled
+   - Check for `switch.*` and `cover.*` relay entities when relays are configured
+   - Check that `lock.<device_name>_lock` exists only when no relays are configured
 
 5. **Test with HomeKit**
    - Ensure HomeKit bridge is configured
    - Verify device appears in Home app
-   - Check accessory type matches door type
+   - Check accessory type matches the relay or legacy lock mapping
 
 6. **Test options flow**
-   - Change door type in options
+   - Change device or relay settings in options
    - Verify HomeKit updates
 
 ## Future Enhancements
 
 Potential additions (not included in this PR):
-- Real 2N API integration
 - Door state sensors
 - Video doorbell support
 - Call notification support
 - Multi-door support per device
+- Broader device-family coverage beyond the one-bell house baseline
 
 ## Security Summary
 
@@ -200,8 +215,9 @@ Potential additions (not included in this PR):
 ## Conclusion
 
 This implementation fully addresses the problem statement by:
-1. ✅ Allowing users to select door type (dveře/vrata)
-2. ✅ Propagating the selection to HomeKit bridge
+1. ✅ Allowing users to map door/gate behavior into the current relay and legacy lock model
+2. ✅ Propagating that behavior to the HomeKit bridge
 3. ✅ Providing proper HomeKit accessory types
+4. ✅ Keeping the scope aligned with the one-bell house deployment target
 
 The integration is production-ready for basic door/gate control with HomeKit support.

@@ -1,12 +1,12 @@
-# Door Type Selection and HomeKit Integration
+# HomeKit Integration
 
 ## Overview
 
-This integration allows users to select between two door types:
-- **Door** (Dveře) - Standard door lock
-- **Gate** (Vrata) - Gate/garage door
+This integration exposes HomeKit-friendly entities for camera, doorbell, and door/gate control.
 
-The selection made by the user is automatically propagated to the HomeKit bridge, ensuring the correct accessory type is exposed in HomeKit.
+- **Relay-based path**: door relays are exposed as switches and gate relays as covers
+- **Legacy no-relay path**: the fallback lock entity still uses door/gate semantics for HomeKit mapping
+- **Doorbell path**: the doorbell sensor must be linked to the camera via YAML so HomeKit shows it as a video doorbell
 
 ## Doorbell in HomeKit (Important)
 
@@ -39,34 +39,25 @@ After changing YAML, restart Home Assistant and re-add the HomeKit bridge in the
 
 ### 1. Configuration Flow
 
-When setting up the integration, users can select the door type via the configuration UI:
+When setting up the integration, users go through the current multi-step flow:
+
+- Connection settings: host, port, protocol, username, password, SSL verification
+- Device settings: name, camera, doorbell, relay count, optional called peer
+- Relay settings: per-relay door/gate type, relay number, and pulse duration when relays are configured
+
+### 2. Relay Type And Legacy Lock Mapping
+
+Relay-based installs store door/gate behavior per configured relay. The legacy no-relay path still uses door-type semantics through the fallback lock entity and options flow.
+
+### 3. HomeKit Entity Mapping
+
+The integration exposes different entity types depending on how it is configured:
+
+- **Relay-based path**: door relays are exposed as switches and gate relays as covers
+- **Legacy no-relay path**: the fallback lock entity still maps door type to a HomeKit-friendly device class
 
 ```python
-# In config_flow.py
-data_schema = vol.Schema({
-    vol.Optional("name", default="2N Intercom"): cv.string,
-    vol.Required(CONF_DOOR_TYPE, default=DOOR_TYPE_DOOR): vol.In(DOOR_TYPES),
-})
-```
-
-### 2. Door Type Storage
-
-The selected door type is stored in the config entry data and can be updated via options flow:
-
-```python
-# Users can change the door type later via integration options
-class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
-    async def async_step_init(self, user_input: dict[str, Any] | None = None):
-        # Allows updating door type after initial setup
-        ...
-```
-
-### 3. HomeKit Device Class Mapping
-
-The door type is mapped to the appropriate HomeKit device class in the lock entity:
-
-```python
-# In lock.py
+# Legacy lock path in lock.py
 def __init__(self, config_entry: ConfigEntry, door_type: str) -> None:
     if door_type == DOOR_TYPE_GATE:
         self._attr_device_class = "gate"
@@ -77,41 +68,49 @@ def __init__(self, config_entry: ConfigEntry, door_type: str) -> None:
 
 Home Assistant's HomeKit integration uses the device class to determine the accessory type:
 
-- **Door** (no device_class): Exposed as **Lock** accessory in HomeKit
-  - Appears as a standard door lock in the Home app
-  - Shows locked/unlocked states
-  - Can be locked/unlocked
+- **Camera + linked doorbell sensor**: Exposed as a **Video Doorbell** accessory in HomeKit
+  - The camera must be linked to the doorbell sensor via `linked_doorbell_sensor`
+  - HomeKit shows the doorbell on the camera accessory, not as a standalone tile
 
-- **Gate** (device_class="gate"): Exposed as **Garage Door Opener** accessory in HomeKit
+- **Door relay switch**: Exposed according to your HomeKit bridge filter and entity type
+  - Typically used for momentary open/unlock actions
+
+- **Gate relay cover**: Exposed as **Garage Door Opener** accessory in HomeKit
   - Appears as a garage door in the Home app
   - Shows open/closed states
   - Can be opened/closed
   - More appropriate for gates and large doors
+
+- **Legacy lock entity** (no relays configured):
+  - `device_class=None` behaves like a standard lock
+  - `device_class="gate"` behaves like a garage door opener
 
 ## User Experience
 
 ### Setup Flow
 
 1. User adds the "2N Intercom" integration
-2. User enters a name for the device
-3. **User selects door type**: Door or Gate
-4. Integration creates a lock entity with appropriate HomeKit configuration
+2. User enters connection settings
+3. User configures device options such as camera, doorbell, relay count, and optional called peer
+4. User configures relay type and duration when relays are present
+5. Integration creates camera, doorbell, and relay entities, or the legacy lock entity when no relays are configured
 
-### Changing Door Type
+### Changing Device Or Relay Settings
 
 1. User goes to integration options
-2. User selects new door type
+2. User updates device or relay settings
 3. Integration reloads with new configuration
-4. HomeKit accessory updates to new type
+4. HomeKit accessory mapping updates to match the recreated entities
 
 ### HomeKit Integration
 
 Once the integration is set up and the HomeKit bridge is configured in Home Assistant:
 
-1. The lock entity is automatically discovered by the HomeKit bridge
-2. The device appears in the Home app with the correct accessory type
-3. Users can control the door/gate from their iOS/macOS devices
-4. Siri can control the door/gate using appropriate commands
+1. The camera is included in the HomeKit bridge and linked to the doorbell sensor via YAML
+2. The relevant relay entities or legacy lock entity are included in the HomeKit bridge
+3. The device appears in the Home app with the correct accessory type
+4. Users can control the door/gate from their iOS/macOS devices
+5. Siri can control the door/gate using appropriate commands
 
 ## Technical Details
 
@@ -133,16 +132,16 @@ This tells Home Assistant that this integration is HomeKit-compatible.
 - `None` (default): Standard lock
 - `"gate"`: Gate/garage door opener
 
-### Lock Entity Features
+### Legacy Lock Entity Features
 
-The lock entity supports:
+The legacy lock entity supports:
 - `LockEntityFeature.OPEN`: Allows opening the door/gate
 - Locked/unlocked states
 - Device information for proper identification in HomeKit
 
 ## Translations
 
-The door type selection is translated in both English and Czech:
+The legacy door/gate terminology is translated in both English and Czech:
 
 **English:**
 - Door Type → "Door" or "Gate"
@@ -152,20 +151,20 @@ The door type selection is translated in both English and Czech:
 
 ## Example Configuration
 
-### Example 1: Standard Door
+### Example 1: Door Relay
 
 ```yaml
-name: "Front Door"
-door_type: "door"
+relay_name: "Front Door"
+relay_device_type: "door"
 ```
 
-Result in HomeKit: Lock accessory
+Result in HomeKit: Switch/lock-like door control, depending on your bridge mapping
 
-### Example 2: Gate
+### Example 2: Gate Relay
 
 ```yaml
-name: "Garden Gate"
-door_type: "gate"
+relay_name: "Garden Gate"
+relay_device_type: "gate"
 ```
 
 Result in HomeKit: Garage Door Opener accessory
@@ -173,7 +172,6 @@ Result in HomeKit: Garage Door Opener accessory
 ## Future Enhancements
 
 Potential future improvements:
-- Add actual 2N API integration for real door control
 - Support for multiple doors/gates per device
 - Door state sensors (open/closed)
 - Video doorbell support

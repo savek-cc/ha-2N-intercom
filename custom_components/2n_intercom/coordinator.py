@@ -1,6 +1,7 @@
 """DataUpdateCoordinator for 2N Intercom."""
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import timedelta, datetime
 import logging
@@ -35,6 +36,7 @@ class TwoNIntercomData:
     call_status: dict[str, Any]
     last_ring_time: datetime | None
     caller_info: dict[str, Any] | None
+    active_session_id: str | None
     available: bool
 
 
@@ -61,6 +63,7 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
         self._last_call_state: dict[str, Any] = {}
         self._ring_detected = False
         self._last_ring_time: datetime | None = None
+        self._active_session_id: str | None = None
         # Note: _retry_count is safe from race conditions because Home Assistant's
         # DataUpdateCoordinator serializes update calls - only one _async_update_data
         # runs at a time
@@ -73,6 +76,8 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
         self._last_called_peer: str | None = None
         self._last_call_state_value: str = "idle"
         self._ring_pulse_until: datetime | None = None
+        self._log_subscription_id: int | None = None
+        self._log_listener_task: asyncio.Task | None = None
 
     @staticmethod
     def _normalize_peer(peer: str | None) -> str | None:
@@ -113,6 +118,173 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
 
         return None
 
+    @staticmethod
+    def _extract_active_session_id(call_status: dict[str, Any]) -> str | None:
+        """Return the active call session id, if available."""
+        if not isinstance(call_status, dict):
+            return None
+
+        active_states = {"ringing", "alerting", "incoming", "active", "connected"}
+        sessions = call_status.get("sessions") or []
+
+        for session in sessions:
+            if not isinstance(session, dict):
+                continue
+
+            candidate = session.get("session")
+            if candidate is None:
+                continue
+
+            normalized_candidate = str(candidate).strip()
+            if not normalized_candidate:
+                continue
+
+            state = str(session.get("state") or "").strip().lower()
+            if state in active_states:
+                return normalized_candidate
+
+        state = str(call_status.get("state") or "").strip().lower()
+        if state in active_states:
+            session_id = call_status.get("session")
+            if session_id is not None:
+                normalized_session = str(session_id).strip()
+                if normalized_session:
+                    return normalized_session
+
+        return None
+
+    def _process_log_event(self, event: dict[str, Any]) -> bool:
+        """Apply a supported log event to coordinator state."""
+        if not isinstance(event, dict):
+            return False
+
+        event_name = str(event.get("event") or "").strip()
+        if event_name not in {"CallStateChanged", "CallSessionStateChanged"}:
+            return False
+
+        params = event.get("params") or {}
+        if not isinstance(params, dict):
+            return False
+
+        raw_state = params.get("state") or params.get("status")
+        if raw_state is None:
+            return False
+
+        state = str(raw_state).strip().lower()
+        if not state:
+            return False
+
+        raw_session_id = params.get("session")
+        session_id: str | None = None
+        if raw_session_id is not None:
+            normalized_session_id = str(raw_session_id).strip()
+            if normalized_session_id:
+                session_id = normalized_session_id
+
+        raw_peer = params.get("peer") or params.get("address")
+        if raw_peer is not None:
+            self._last_called_peer = self._normalize_peer(str(raw_peer))
+
+        direction = str(params.get("direction") or "").strip().lower()
+        active_states = self._RING_STATES | {"active", "connected"}
+        terminal_states = {
+            "idle",
+            "terminated",
+            "ended",
+            "finished",
+            "closed",
+            "hangup",
+            "hungup",
+            "disconnected",
+        }
+
+        if session_id is not None and state in active_states:
+            self._active_session_id = session_id
+        elif state in terminal_states and (
+            session_id is None or self._active_session_id == session_id
+        ):
+            self._active_session_id = None
+
+        ring_allowed = (
+            self._ring_filter_peer is None
+            or self._last_called_peer == self._ring_filter_peer
+        )
+        is_ringing = state in self._RING_STATES and direction != "outgoing"
+        if is_ringing and ring_allowed:
+            self._ring_detected = True
+            self._last_ring_time = datetime.now()
+            self._ring_pulse_until = (
+                self._last_ring_time
+                + timedelta(seconds=DOORBELL_PULSE_DURATION)
+            )
+        elif state not in self._RING_STATES:
+            self._ring_detected = False
+            self._ring_pulse_until = None
+
+        self._last_call_state_value = state
+
+        if self.data is not None:
+            self.data = TwoNIntercomData(
+                call_status=self.data.call_status,
+                last_ring_time=self._last_ring_time,
+                caller_info=self.data.caller_info,
+                active_session_id=self._active_session_id,
+                available=self.data.available,
+            )
+
+        return True
+
+    async def _async_log_listener_loop(self) -> None:
+        """Subscribe to call-related log events and apply them as they arrive."""
+        subscription_id = await self.api.async_subscribe_log(
+            ["CallStateChanged", "CallSessionStateChanged"]
+        )
+        if subscription_id is None:
+            return
+
+        self._log_subscription_id = subscription_id
+
+        while True:
+            events = await self.api.async_pull_log(subscription_id, timeout=1)
+            updated = False
+            for event in events:
+                updated = self._process_log_event(event) or updated
+
+            if updated and hasattr(self, "async_update_listeners"):
+                self.async_update_listeners()
+
+            await asyncio.sleep(0)
+
+    async def async_start_log_listener(self) -> None:
+        """Start the background log-listener task if it is not already running."""
+        if self._log_listener_task is not None and not self._log_listener_task.done():
+            return
+
+        create_task = getattr(self.hass, "async_create_task", asyncio.create_task)
+        self._log_listener_task = create_task(self._async_log_listener_loop())
+
+    async def async_stop_log_listener(self) -> None:
+        """Stop the background log-listener task and unsubscribe active channel."""
+        subscription_id = self._log_subscription_id
+        task = self._log_listener_task
+        self._log_listener_task = None
+
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        if subscription_id is not None:
+            try:
+                await self.api.async_unsubscribe_log(subscription_id)
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.debug("Failed to unsubscribe log listener %s: %s", subscription_id, err)
+            finally:
+                if self._log_subscription_id == subscription_id:
+                    self._log_subscription_id = None
+
     async def _async_update_data(self) -> TwoNIntercomData:
         """Fetch data from API."""
         try:
@@ -133,6 +305,8 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
             current_state = self._extract_call_state(call_status) or "idle"
             previous_state = self._last_call_state_value or "idle"
             called_peer_raw = self._extract_called_peer(call_status)
+            active_session_id = self._extract_active_session_id(call_status)
+            self._active_session_id = active_session_id
             self._last_called_peer = self._normalize_peer(called_peer_raw)
             ring_allowed = (
                 self._ring_filter_peer is None
@@ -171,6 +345,7 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
                 call_status=call_status,
                 last_ring_time=self._last_ring_time,
                 caller_info=caller_info if caller_info else None,
+                active_session_id=active_session_id,
                 available=True,
             )
             
@@ -231,9 +406,7 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
     @property
     def last_ring_time(self) -> datetime | None:
         """Return last ring timestamp."""
-        if self.data:
-            return self.data.last_ring_time
-        return None
+        return self._last_ring_time
 
     @property
     def caller_info(self) -> dict[str, Any]:
@@ -250,9 +423,12 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
     @property
     def call_state(self) -> str | None:
         """Return the last detected call state."""
-        if self.data and self.data.call_status:
-            return self._extract_call_state(self.data.call_status)
-        return None
+        return self._last_call_state_value or None
+
+    @property
+    def active_session_id(self) -> str | None:
+        """Return the last detected active call session id."""
+        return self._active_session_id
 
     @property
     def system_info(self) -> dict[str, Any]:

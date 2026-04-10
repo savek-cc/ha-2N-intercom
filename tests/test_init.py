@@ -1,0 +1,493 @@
+"""Unit tests for integration setup and service registration."""
+
+from __future__ import annotations
+
+import importlib.util
+import sys
+import types
+import unittest
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+API_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "api.py"
+CONST_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "const.py"
+COORDINATOR_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "coordinator.py"
+INIT_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "__init__.py"
+
+
+def _ensure_package(name: str) -> types.ModuleType:
+    module = sys.modules.get(name)
+    if module is None:
+        module = types.ModuleType(name)
+        module.__path__ = []  # type: ignore[attr-defined]
+        sys.modules[name] = module
+    return module
+
+
+def _install_api_stubs() -> None:
+    aiohttp = types.ModuleType("aiohttp")
+
+    class BasicAuth:
+        def __init__(self, login: str, password: str) -> None:
+            self.login = login
+            self.password = password
+
+    class TCPConnector:
+        def __init__(self, ssl: bool) -> None:
+            self.ssl = ssl
+
+    class ClientSession:
+        def __init__(self, *args, **kwargs) -> None:
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class ClientResponse:
+        status = 200
+        headers: dict[str, str] = {}
+
+    class ClientError(Exception):
+        """Stub aiohttp client error."""
+
+    def digest_auth_middleware(*args, **kwargs):
+        return object()
+
+    aiohttp.BasicAuth = BasicAuth
+    aiohttp.TCPConnector = TCPConnector
+    aiohttp.ClientSession = ClientSession
+    aiohttp.ClientResponse = ClientResponse
+    aiohttp.ClientError = ClientError
+    aiohttp.DigestAuthMiddleware = digest_auth_middleware
+    sys.modules["aiohttp"] = aiohttp
+
+    async_timeout = types.ModuleType("async_timeout")
+
+    class _Timeout:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    def timeout(*args, **kwargs):
+        return _Timeout()
+
+    async_timeout.timeout = timeout
+    sys.modules["async_timeout"] = async_timeout
+
+
+def _install_homeassistant_stubs() -> None:
+    _ensure_package("homeassistant")
+
+    const = types.ModuleType("homeassistant.const")
+    const.CONF_HOST = "host"
+    const.CONF_PASSWORD = "password"
+    const.CONF_PORT = "port"
+    const.CONF_USERNAME = "username"
+    sys.modules["homeassistant.const"] = const
+
+    core = types.ModuleType("homeassistant.core")
+    core.HomeAssistant = object
+    core.ServiceCall = object
+    sys.modules["homeassistant.core"] = core
+
+    exceptions = types.ModuleType("homeassistant.exceptions")
+
+    class HomeAssistantError(Exception):
+        pass
+
+    class ConfigEntryNotReady(Exception):
+        pass
+
+    exceptions.HomeAssistantError = HomeAssistantError
+    exceptions.ConfigEntryNotReady = ConfigEntryNotReady
+    sys.modules["homeassistant.exceptions"] = exceptions
+
+    config_entries = types.ModuleType("homeassistant.config_entries")
+    config_entries.ConfigEntry = object
+    sys.modules["homeassistant.config_entries"] = config_entries
+
+    update_coordinator = types.ModuleType("homeassistant.helpers.update_coordinator")
+
+    class DataUpdateCoordinator:
+        def __class_getitem__(cls, item):
+            return cls
+
+        def __init__(self, hass, logger, name, update_interval) -> None:
+            del logger, name, update_interval
+            self.hass = hass
+            self.data = None
+            self.last_update_success = True
+
+        async def async_config_entry_first_refresh(self):
+            self.data = await self._async_update_data()
+            return self.data
+
+    class UpdateFailed(Exception):
+        pass
+
+    update_coordinator.DataUpdateCoordinator = DataUpdateCoordinator
+    update_coordinator.UpdateFailed = UpdateFailed
+    sys.modules["homeassistant.helpers.update_coordinator"] = update_coordinator
+    _ensure_package("homeassistant.helpers")
+
+
+def _load_module(module_name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_init_module():
+    _install_api_stubs()
+    _install_homeassistant_stubs()
+    _ensure_package("custom_components")
+    _ensure_package("custom_components.2n_intercom")
+    _load_module("custom_components.2n_intercom.const", CONST_PATH)
+    _load_module("custom_components.2n_intercom.api", API_PATH)
+    _load_module("custom_components.2n_intercom.coordinator", COORDINATOR_PATH)
+    return _load_module("custom_components.2n_intercom.__init__", INIT_PATH)
+
+
+class FakeServiceRegistry:
+    def __init__(self) -> None:
+        self.handlers: dict[tuple[str, str], object] = {}
+
+    def async_register(self, domain, service, handler, schema=None) -> None:
+        del schema
+        self.handlers[(domain, service)] = handler
+
+    def has_service(self, domain, service) -> bool:
+        return (domain, service) in self.handlers
+
+
+class FakeConfigEntry:
+    def __init__(self, entry_id: str, data: dict[str, object], options=None) -> None:
+        self.entry_id = entry_id
+        self.data = data
+        self.options = options or {}
+        self._unload_callback = None
+        self._update_listener = None
+
+    def add_update_listener(self, listener):
+        self._update_listener = listener
+        return listener
+
+    def async_on_unload(self, callback) -> None:
+        self._unload_callback = callback
+
+
+class FakeConfigEntries:
+    def __init__(self, entries: list[FakeConfigEntry]) -> None:
+        self._entries = entries
+        self.forwarded: list[tuple[str, tuple[str, ...]]] = []
+
+    async def async_forward_entry_setups(self, entry, platforms) -> None:
+        self.forwarded.append((entry.entry_id, tuple(platforms)))
+
+    async def async_unload_platforms(self, entry, platforms) -> bool:
+        del entry, platforms
+        return True
+
+    async def async_reload(self, entry_id) -> None:
+        del entry_id
+
+    def async_entries(self, domain):
+        del domain
+        return list(self._entries)
+
+
+class FakeHass:
+    def __init__(self, entries: list[FakeConfigEntry]) -> None:
+        self.services = FakeServiceRegistry()
+        self.config_entries = FakeConfigEntries(entries)
+        self.data: dict[str, object] = {}
+        self.components = types.SimpleNamespace(
+            persistent_notification=types.SimpleNamespace(async_create=lambda *a, **k: None)
+        )
+
+
+class FakeAPI:
+    def __init__(self, *args, call_status=None, answer_result=True, hangup_result=True, **kwargs) -> None:
+        del args, kwargs
+        self._call_status = call_status or {
+            "state": "ringing",
+            "sessions": [
+                {
+                    "session": "session-123",
+                    "direction": "incoming",
+                    "state": "ringing",
+                    "calls": [{"peer": "100"}],
+                }
+            ],
+        }
+        self._answer_result = answer_result
+        self._hangup_result = hangup_result
+        self.answer_calls: list[object] = []
+        self.hangup_calls: list[tuple[object, str]] = []
+
+    async def async_get_system_info(self):
+        return {"model": "2N"}
+
+    async def async_get_call_status(self):
+        return self._call_status
+
+    async def async_answer_call(self, session_id):
+        self.answer_calls.append(session_id)
+        return self._answer_result
+
+    async def async_hangup_call(self, session_id, reason="normal"):
+        self.hangup_calls.append((session_id, reason))
+        return self._hangup_result
+
+    async def async_subscribe_log(self, events):
+        del events
+        return None
+
+    async def async_pull_log(self, subscription_id, *, timeout=None):
+        del subscription_id, timeout
+        return []
+
+    async def async_unsubscribe_log(self, subscription_id):
+        del subscription_id
+        return True
+
+    async def async_close(self):
+        return None
+
+
+class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
+    """Tests for setup entry and service dispatch."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.init_module = load_init_module()
+        cls.const_module = sys.modules["custom_components.2n_intercom.const"]
+
+    async def test_setup_registers_and_dispatches_call_services(self) -> None:
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+                ha_const.CONF_PORT: 443,
+            },
+        )
+        hass = FakeHass([entry])
+
+        result = await init_module.async_setup_entry(hass, entry)
+
+        self.assertTrue(result)
+        self.assertTrue(hass.services.has_service(const_module.DOMAIN, "answer_call"))
+        self.assertTrue(hass.services.has_service(const_module.DOMAIN, "hangup_call"))
+
+        answer_call = hass.services.handlers[(const_module.DOMAIN, "answer_call")]
+        hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
+
+        await answer_call(types.SimpleNamespace(data={}))
+        await hangup_call(types.SimpleNamespace(data={"reason": "busy"}))
+
+        stored = hass.data[const_module.DOMAIN][entry.entry_id]
+        self.assertEqual(stored["api"].answer_calls, ["session-123"])
+        self.assertEqual(stored["api"].hangup_calls, [("session-123", "busy")])
+
+    async def test_service_raises_when_api_reports_failure(self) -> None:
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+
+        await init_module.async_setup_entry(hass, entry)
+        hass.data[const_module.DOMAIN][entry.entry_id]["api"] = FakeAPI(
+            answer_result=False,
+            hangup_result=False,
+        )
+
+        answer_call = hass.services.handlers[(const_module.DOMAIN, "answer_call")]
+        hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
+
+        with self.assertRaises(
+            sys.modules["homeassistant.exceptions"].HomeAssistantError
+        ):
+            await answer_call(types.SimpleNamespace(data={}))
+
+        with self.assertRaises(
+            sys.modules["homeassistant.exceptions"].HomeAssistantError
+        ):
+            await hangup_call(types.SimpleNamespace(data={}))
+
+    async def test_hangup_reason_defaults_to_normal_for_none(self) -> None:
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+
+        await init_module.async_setup_entry(hass, entry)
+
+        hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
+        await hangup_call(types.SimpleNamespace(data={"reason": None}))
+
+        stored = hass.data[const_module.DOMAIN][entry.entry_id]
+        self.assertEqual(stored["api"].hangup_calls, [("session-123", "normal")])
+
+    async def test_service_rejects_ambiguous_target_without_config_entry_id(self) -> None:
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry_1 = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom-1.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        entry_2 = FakeConfigEntry(
+            "entry-2",
+            {
+                ha_const.CONF_HOST: "intercom-2.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry_1, entry_2])
+
+        await init_module.async_setup_entry(hass, entry_1)
+        hass.data[const_module.DOMAIN][entry_2.entry_id] = {
+            "coordinator": types.SimpleNamespace(active_session_id="session-999"),
+            "api": FakeAPI(),
+        }
+
+        answer_call = hass.services.handlers[(const_module.DOMAIN, "answer_call")]
+
+        with self.assertRaises(
+            sys.modules["homeassistant.exceptions"].HomeAssistantError
+        ):
+            await answer_call(types.SimpleNamespace(data={}))
+
+    async def test_service_allows_config_entry_id_to_disambiguate_multi_entry(self) -> None:
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry_1 = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom-1.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        entry_2 = FakeConfigEntry(
+            "entry-2",
+            {
+                ha_const.CONF_HOST: "intercom-2.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry_1, entry_2])
+
+        await init_module.async_setup_entry(hass, entry_1)
+        await init_module.async_setup_entry(hass, entry_2)
+
+        stored_1 = hass.data[const_module.DOMAIN][entry_1.entry_id]
+        stored_2 = hass.data[const_module.DOMAIN][entry_2.entry_id]
+        stored_1["coordinator"]._active_session_id = "session-one"
+        stored_2["coordinator"]._active_session_id = "session-two"
+
+        answer_call = hass.services.handlers[(const_module.DOMAIN, "answer_call")]
+
+        await answer_call(
+            types.SimpleNamespace(
+                data={
+                    "config_entry_id": entry_2.entry_id,
+                }
+            )
+        )
+
+        self.assertEqual(stored_1["api"].answer_calls, [])
+        self.assertEqual(stored_2["api"].answer_calls, ["session-two"])
+
+    async def test_setup_and_unload_manage_log_listener_lifecycle(self) -> None:
+        init_module = self.init_module
+        ha_const = sys.modules["homeassistant.const"]
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        start_calls: list[str] = []
+        stop_calls: list[str] = []
+
+        original_start = init_module.TwoNIntercomCoordinator.async_start_log_listener
+        original_stop = init_module.TwoNIntercomCoordinator.async_stop_log_listener
+
+        async def fake_start(self):
+            start_calls.append(self.__class__.__name__)
+
+        async def fake_stop(self):
+            stop_calls.append(self.__class__.__name__)
+
+        init_module.TwoNIntercomCoordinator.async_start_log_listener = fake_start
+        init_module.TwoNIntercomCoordinator.async_stop_log_listener = fake_stop
+
+        try:
+            entry = FakeConfigEntry(
+                "entry-1",
+                {
+                    ha_const.CONF_HOST: "intercom.local",
+                    ha_const.CONF_PORT: 443,
+                    ha_const.CONF_USERNAME: "user",
+                    ha_const.CONF_PASSWORD: "secret",
+                },
+            )
+            hass = FakeHass([entry])
+
+            await init_module.async_setup_entry(hass, entry)
+            await init_module.async_unload_entry(hass, entry)
+        finally:
+            init_module.TwoNIntercomCoordinator.async_start_log_listener = original_start
+            init_module.TwoNIntercomCoordinator.async_stop_log_listener = original_stop
+
+        self.assertEqual(start_calls, ["TwoNIntercomCoordinator"])
+        self.assertEqual(stop_calls, ["TwoNIntercomCoordinator"])
