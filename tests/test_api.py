@@ -351,6 +351,148 @@ class CallControlApiTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result)
 
+    async def test_get_phone_status_returns_result_payload(self) -> None:
+        api = self._make_api(
+            {
+                "success": True,
+                "result": {
+                    "accounts": [
+                        {"account": 1, "enabled": True, "registered": True}
+                    ]
+                },
+            }
+        )
+
+        result = await api.async_get_phone_status()
+
+        self.assertEqual(result, {"accounts": [{"account": 1, "enabled": True, "registered": True}]})
+        self.assertEqual(
+            api.requests,
+            [
+                {
+                    "method": "GET",
+                    "path": "/api/phone/status",
+                    "params": None,
+                    "json_data": None,
+                    "headers": None,
+                }
+            ],
+        )
+
+    async def test_get_switch_caps_returns_result_payload(self) -> None:
+        api = self._make_api(
+            {
+                "success": True,
+                "result": {
+                    "switches": [
+                        {"switch": 1, "enabled": True, "mode": "monostable"}
+                    ]
+                },
+            }
+        )
+
+        result = await api.async_get_switch_caps()
+
+        self.assertEqual(
+            result,
+            {"switches": [{"switch": 1, "enabled": True, "mode": "monostable"}]},
+        )
+        self.assertEqual(
+            api.requests,
+            [
+                {
+                    "method": "GET",
+                    "path": "/api/switch/caps",
+                    "params": None,
+                    "json_data": None,
+                    "headers": None,
+                }
+            ],
+        )
+
+    async def test_get_switch_status_returns_result_payload(self) -> None:
+        api = self._make_api(
+            {
+                "success": True,
+                "result": {
+                    "switches": [
+                        {"switch": 1, "active": False, "locked": False, "held": False}
+                    ]
+                },
+            }
+        )
+
+        result = await api.async_get_switch_status()
+
+        self.assertEqual(
+            result,
+            {"switches": [{"switch": 1, "active": False, "locked": False, "held": False}]},
+        )
+        self.assertEqual(
+            api.requests,
+            [
+                {
+                    "method": "GET",
+                    "path": "/api/switch/status",
+                    "params": None,
+                    "json_data": None,
+                    "headers": None,
+                }
+            ],
+        )
+
+    async def test_get_io_caps_returns_result_payload(self) -> None:
+        api = self._make_api(
+            {
+                "success": True,
+                "result": {
+                    "ports": [{"port": "relay1", "type": "output"}]
+                },
+            }
+        )
+
+        result = await api.async_get_io_caps()
+
+        self.assertEqual(result, {"ports": [{"port": "relay1", "type": "output"}]})
+        self.assertEqual(
+            api.requests,
+            [
+                {
+                    "method": "GET",
+                    "path": "/api/io/caps",
+                    "params": None,
+                    "json_data": None,
+                    "headers": None,
+                }
+            ],
+        )
+
+    async def test_get_io_status_returns_result_payload(self) -> None:
+        api = self._make_api(
+            {
+                "success": True,
+                "result": {
+                    "ports": [{"port": "relay1", "state": 0}]
+                },
+            }
+        )
+
+        result = await api.async_get_io_status()
+
+        self.assertEqual(result, {"ports": [{"port": "relay1", "state": 0}]})
+        self.assertEqual(
+            api.requests,
+            [
+                {
+                    "method": "GET",
+                    "path": "/api/io/status",
+                    "params": None,
+                    "json_data": None,
+                    "headers": None,
+                }
+            ],
+        )
+
     async def test_subscribe_log_sends_filter_and_returns_subscription_id(self) -> None:
         api = self._make_api({"success": True, "result": {"id": 287363148}})
 

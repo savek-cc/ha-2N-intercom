@@ -33,6 +33,11 @@ API_TIMEOUT = 10
 RTSP_PATH = "h264_stream"
 CAMERA_CAPS_PATH = "/api/camera/caps"
 CAMERA_SNAPSHOT_PATH = "/api/camera/snapshot"
+PHONE_STATUS_PATH = "/api/phone/status"
+SWITCH_CAPS_PATH = "/api/switch/caps"
+SWITCH_STATUS_PATH = "/api/switch/status"
+IO_CAPS_PATH = "/api/io/caps"
+IO_STATUS_PATH = "/api/io/status"
 RTSP_PROBE_TIMEOUT = 3
 
 _RESOLUTION_RE = re.compile(r"^\s*(\d+)\s*x\s*(\d+)\s*$")
@@ -600,6 +605,57 @@ class TwoNIntercomAPI:
         except Exception as err:
             _LOGGER.error("Unexpected error getting call status: %s", err)
             raise TwoNAPIError(f"API error: {err}") from err
+
+    async def _async_get_result_dict(self, path: str, label: str) -> dict[str, Any]:
+        """Fetch a JSON result object from a GET endpoint."""
+        try:
+            async with async_timeout.timeout(API_TIMEOUT):
+                async with self._async_request("GET", path) as response:
+                    if response.status == 401:
+                        raise TwoNAuthenticationError(
+                            "Authentication failed - invalid credentials"
+                        )
+
+                    response.raise_for_status()
+                    data = await response.json()
+
+            if isinstance(data, dict):
+                result = data.get("result", {})
+                if isinstance(result, dict):
+                    return result
+            return {}
+
+        except TwoNAuthenticationError:
+            raise
+        except asyncio.TimeoutError as err:
+            _LOGGER.error("Timeout getting %s: %s", label, err)
+            raise TwoNConnectionError(f"Timeout: {err}") from err
+        except aiohttp.ClientError as err:
+            _LOGGER.error("Error getting %s: %s", label, err)
+            raise TwoNConnectionError(f"Connection error: {err}") from err
+        except Exception as err:
+            _LOGGER.error("Unexpected error getting %s: %s", label, err)
+            raise TwoNAPIError(f"API error: {err}") from err
+
+    async def async_get_phone_status(self) -> dict[str, Any]:
+        """Get current phone status from /api/phone/status."""
+        return await self._async_get_result_dict(PHONE_STATUS_PATH, "phone status")
+
+    async def async_get_switch_caps(self) -> dict[str, Any]:
+        """Get switch capabilities from /api/switch/caps."""
+        return await self._async_get_result_dict(SWITCH_CAPS_PATH, "switch caps")
+
+    async def async_get_switch_status(self) -> dict[str, Any]:
+        """Get switch status from /api/switch/status."""
+        return await self._async_get_result_dict(SWITCH_STATUS_PATH, "switch status")
+
+    async def async_get_io_caps(self) -> dict[str, Any]:
+        """Get IO capabilities from /api/io/caps."""
+        return await self._async_get_result_dict(IO_CAPS_PATH, "io caps")
+
+    async def async_get_io_status(self) -> dict[str, Any]:
+        """Get IO status from /api/io/status."""
+        return await self._async_get_result_dict(IO_STATUS_PATH, "io status")
 
     async def _async_call_action(
         self,

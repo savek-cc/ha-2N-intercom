@@ -38,6 +38,11 @@ class TwoNIntercomData:
     caller_info: dict[str, Any] | None
     active_session_id: str | None
     available: bool
+    phone_status: dict[str, Any]
+    switch_caps: dict[str, Any]
+    switch_status: dict[str, Any]
+    io_caps: dict[str, Any]
+    io_status: dict[str, Any]
 
 
 class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
@@ -72,6 +77,11 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
         self._snapshot_cache_time: datetime | None = None
         self._snapshot_cache_size: tuple[int | None, int | None] | None = None
         self._system_info: dict[str, Any] | None = None
+        self._phone_status: dict[str, Any] | None = None
+        self._switch_caps: dict[str, Any] | None = None
+        self._switch_status: dict[str, Any] | None = None
+        self._io_caps: dict[str, Any] | None = None
+        self._io_status: dict[str, Any] | None = None
         self._ring_filter_peer = self._normalize_peer(called_id)
         self._last_called_peer: str | None = None
         self._last_call_state_value: str = "idle"
@@ -251,6 +261,11 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
                 caller_info=self.data.caller_info,
                 active_session_id=self._active_session_id,
                 available=self.data.available,
+                phone_status=self.data.phone_status,
+                switch_caps=self.data.switch_caps,
+                switch_status=self.data.switch_status,
+                io_caps=self.data.io_caps,
+                io_status=self.data.io_status,
             )
 
         return True
@@ -316,9 +331,68 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
                     _LOGGER.debug("Failed to fetch system info: %s", err)
                     self._system_info = {}
 
+            async def _refresh_secondary_cache(
+                cache_attr: str,
+                method_name: str,
+                label: str,
+                *,
+                log_level: str = "debug",
+            ) -> dict[str, Any]:
+                fetcher = getattr(self.api, method_name, None)
+                if fetcher is None or not callable(fetcher):
+                    _LOGGER.debug(
+                        "API does not expose %s; using cached %s",
+                        method_name,
+                        label,
+                    )
+                    cached_value = getattr(self, cache_attr)
+                    return cached_value or {}
+
+                try:
+                    value = await fetcher()
+                except Exception as err:  # pylint: disable=broad-except
+                    log_message = f"Failed to fetch {label}: %s"
+                    if log_level == "warning":
+                        _LOGGER.warning(log_message, err)
+                    else:
+                        _LOGGER.debug(log_message, err)
+                    cached_value = getattr(self, cache_attr)
+                    return cached_value or {}
+
+                setattr(self, cache_attr, value)
+                return value
+
+            phone_status = await _refresh_secondary_cache(
+                "_phone_status",
+                "async_get_phone_status",
+                "phone status",
+            )
+            switch_caps = await _refresh_secondary_cache(
+                "_switch_caps",
+                "async_get_switch_caps",
+                "switch caps",
+                log_level="warning",
+            )
+            switch_status = await _refresh_secondary_cache(
+                "_switch_status",
+                "async_get_switch_status",
+                "switch status",
+            )
+            io_caps = await _refresh_secondary_cache(
+                "_io_caps",
+                "async_get_io_caps",
+                "io caps",
+                log_level="warning",
+            )
+            io_status = await _refresh_secondary_cache(
+                "_io_status",
+                "async_get_io_status",
+                "io status",
+            )
+
             # Get current call status
             call_status = await self.api.async_get_call_status()
-            
+
             # Reset retry count on successful update
             self._retry_count = 0
             
@@ -368,6 +442,11 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
                 caller_info=caller_info if caller_info else None,
                 active_session_id=active_session_id,
                 available=True,
+                phone_status=phone_status,
+                switch_caps=switch_caps,
+                switch_status=switch_status,
+                io_caps=io_caps,
+                io_status=io_status,
             )
             
         except TwoNAuthenticationError as err:
@@ -455,6 +534,31 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
     def system_info(self) -> dict[str, Any]:
         """Return cached system info."""
         return self._system_info or {}
+
+    @property
+    def phone_status(self) -> dict[str, Any]:
+        """Return cached phone status."""
+        return self._phone_status or {}
+
+    @property
+    def switch_caps(self) -> dict[str, Any]:
+        """Return cached switch capabilities."""
+        return self._switch_caps or {}
+
+    @property
+    def switch_status(self) -> dict[str, Any]:
+        """Return cached switch status."""
+        return self._switch_status or {}
+
+    @property
+    def io_caps(self) -> dict[str, Any]:
+        """Return cached IO capabilities."""
+        return self._io_caps or {}
+
+    @property
+    def io_status(self) -> dict[str, Any]:
+        """Return cached IO status."""
+        return self._io_status or {}
 
     def get_device_info(self, entry_id: str, name: str) -> dict[str, Any]:
         """Build device info for entities."""

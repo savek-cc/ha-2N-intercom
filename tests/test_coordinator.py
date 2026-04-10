@@ -224,6 +224,91 @@ class TwoNIntercomCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(data.active_session_id)
         self.assertIsNone(coordinator.active_session_id)
 
+    async def test_refresh_caches_phone_switch_and_io_data(self) -> None:
+        coordinator_module = self.coordinator_module
+
+        class FakeAPI:
+            async def async_get_system_info(self):
+                return {"model": "2N"}
+
+            async def async_get_call_status(self):
+                return {"state": "idle", "sessions": []}
+
+            async def async_get_phone_status(self):
+                return {"accounts": [{"account": 1, "registered": True}]}
+
+            async def async_get_switch_caps(self):
+                return {"switches": [{"switch": 1, "enabled": True}]}
+
+            async def async_get_switch_status(self):
+                return {"switches": [{"switch": 1, "active": False}]}
+
+            async def async_get_io_caps(self):
+                return {"ports": [{"port": "relay1", "type": "output"}]}
+
+            async def async_get_io_status(self):
+                return {"ports": [{"port": "relay1", "state": 0}]}
+
+        hass = types.SimpleNamespace()
+        coordinator = coordinator_module.TwoNIntercomCoordinator(hass, FakeAPI())
+
+        data = await coordinator._async_update_data()
+        coordinator.data = data
+
+        self.assertEqual(data.phone_status, {"accounts": [{"account": 1, "registered": True}]})
+        self.assertEqual(data.switch_caps, {"switches": [{"switch": 1, "enabled": True}]})
+        self.assertEqual(data.switch_status, {"switches": [{"switch": 1, "active": False}]})
+        self.assertEqual(data.io_caps, {"ports": [{"port": "relay1", "type": "output"}]})
+        self.assertEqual(data.io_status, {"ports": [{"port": "relay1", "state": 0}]})
+        self.assertEqual(coordinator.phone_status, data.phone_status)
+        self.assertEqual(coordinator.switch_caps, data.switch_caps)
+        self.assertEqual(coordinator.switch_status, data.switch_status)
+        self.assertEqual(coordinator.io_caps, data.io_caps)
+        self.assertEqual(coordinator.io_status, data.io_status)
+
+    async def test_secondary_refresh_failure_keeps_previous_cache(self) -> None:
+        coordinator_module = self.coordinator_module
+
+        class FakeAPI:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def async_get_system_info(self):
+                return {"model": "2N"}
+
+            async def async_get_call_status(self):
+                return {"state": "idle", "sessions": []}
+
+            async def async_get_phone_status(self):
+                self.calls += 1
+                if self.calls > 1:
+                    raise RuntimeError("temporary phone status failure")
+                return {"accounts": [{"account": 1, "registered": True}]}
+
+            async def async_get_switch_caps(self):
+                return {"switches": [{"switch": 1, "enabled": True}]}
+
+            async def async_get_switch_status(self):
+                return {"switches": [{"switch": 1, "active": False}]}
+
+            async def async_get_io_caps(self):
+                return {"ports": [{"port": "relay1", "type": "output"}]}
+
+            async def async_get_io_status(self):
+                return {"ports": [{"port": "relay1", "state": 0}]}
+
+        hass = types.SimpleNamespace()
+        coordinator = coordinator_module.TwoNIntercomCoordinator(hass, FakeAPI())
+
+        first = await coordinator._async_update_data()
+        coordinator.data = first
+        second = await coordinator._async_update_data()
+        coordinator.data = second
+
+        self.assertEqual(first.phone_status, {"accounts": [{"account": 1, "registered": True}]})
+        self.assertEqual(second.phone_status, {"accounts": [{"account": 1, "registered": True}]})
+        self.assertEqual(coordinator.phone_status, {"accounts": [{"account": 1, "registered": True}]})
+
     async def test_process_call_state_event_sets_ring_and_active_session(self) -> None:
         coordinator_module = self.coordinator_module
 
