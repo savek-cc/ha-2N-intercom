@@ -1026,7 +1026,7 @@ class TwoNIntercomAPI:
             response_text = response.decode("utf-8", errors="ignore")
             if not response_text.startswith("RTSP/1.0"):
                 return False
-            return not any(code in response_text for code in (" 404 ", " 454 "))
+            return not any(code in response_text for code in (" 403 ", " 404 ", " 454 "))
         except Exception as err:  # pylint: disable=broad-except
             _LOGGER.debug("RTSP probe failed: %s", err)
             return False

@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 import sys
 import types
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -239,6 +240,110 @@ class CameraTransportProbeRetryTests(unittest.IsolatedAsyncioTestCase):
         second = await api.async_get_camera_transport_info()
         self.assertTrue(second.resolved)
         self.assertEqual(second.selected_mode, api_module.LIVE_VIEW_MODE_JPEG_ONLY)
+
+    async def test_async_probe_rtsp_treats_403_forbidden_as_unavailable(self) -> None:
+        api_module = self.api_module
+
+        class FakeReader:
+            def __init__(self, response: bytes) -> None:
+                self.response = response
+
+            async def read(self, size: int) -> bytes:
+                return self.response
+
+        class FakeWriter:
+            def __init__(self) -> None:
+                self.buffer = bytearray()
+                self.closed = False
+                self.wait_closed_called = False
+
+            def write(self, data: bytes) -> None:
+                self.buffer.extend(data)
+
+            async def drain(self) -> None:
+                return None
+
+            def close(self) -> None:
+                self.closed = True
+
+            async def wait_closed(self) -> None:
+                self.wait_closed_called = True
+
+        api = api_module.TwoNIntercomAPI(
+            host="intercom.local",
+            username="user",
+            password="secret",
+        )
+        response = (
+            b"RTSP/1.0 403 Forbidden\r\n"
+            b"Server: HIP 2.50.0.76.2\r\n"
+            b"Content-Length: 0\r\n\r\n"
+        )
+
+        async def fake_open_connection(host: str, port: int):
+            return FakeReader(response), FakeWriter()
+
+        async def fake_wait_for(awaitable, timeout):
+            return await awaitable
+
+        with patch.object(api_module.asyncio, "open_connection", fake_open_connection), patch.object(
+            api_module.asyncio, "wait_for", fake_wait_for
+        ):
+            result = await api.async_probe_rtsp()
+
+        self.assertFalse(result)
+
+    async def test_async_probe_rtsp_accepts_200_ok_as_available(self) -> None:
+        api_module = self.api_module
+
+        class FakeReader:
+            def __init__(self, response: bytes) -> None:
+                self.response = response
+
+            async def read(self, size: int) -> bytes:
+                return self.response
+
+        class FakeWriter:
+            def __init__(self) -> None:
+                self.buffer = bytearray()
+                self.closed = False
+                self.wait_closed_called = False
+
+            def write(self, data: bytes) -> None:
+                self.buffer.extend(data)
+
+            async def drain(self) -> None:
+                return None
+
+            def close(self) -> None:
+                self.closed = True
+
+            async def wait_closed(self) -> None:
+                self.wait_closed_called = True
+
+        api = api_module.TwoNIntercomAPI(
+            host="intercom.local",
+            username="user",
+            password="secret",
+        )
+        response = (
+            b"RTSP/1.0 200 OK\r\n"
+            b"Server: HIP 2.50.0.76.2\r\n"
+            b"Content-Length: 0\r\n\r\n"
+        )
+
+        async def fake_open_connection(host: str, port: int):
+            return FakeReader(response), FakeWriter()
+
+        async def fake_wait_for(awaitable, timeout):
+            return await awaitable
+
+        with patch.object(api_module.asyncio, "open_connection", fake_open_connection), patch.object(
+            api_module.asyncio, "wait_for", fake_wait_for
+        ):
+            result = await api.async_probe_rtsp()
+
+        self.assertTrue(result)
 
 
 class CallControlApiTests(unittest.IsolatedAsyncioTestCase):
