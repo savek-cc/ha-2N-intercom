@@ -299,6 +299,87 @@ class TwoNIntercomCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.call_state, "terminated")
         self.assertFalse(coordinator.ring_active)
 
+    async def test_process_call_session_state_event_sets_ring_and_active_session(self) -> None:
+        coordinator_module = self.coordinator_module
+
+        class FakeAPI:
+            async def async_get_system_info(self):
+                return {"model": "2N"}
+
+            async def async_get_call_status(self):
+                return {"state": "idle", "sessions": []}
+
+        hass = types.SimpleNamespace()
+        coordinator = coordinator_module.TwoNIntercomCoordinator(hass, FakeAPI())
+
+        data = await coordinator._async_update_data()
+        coordinator.data = data
+
+        coordinator._process_log_event(
+            {
+                "event": "CallSessionStateChanged",
+                "params": {
+                    "direction": "incoming",
+                    "state": "ringing",
+                    "address": "sip:100@example.com",
+                    "sessionNumber": 42,
+                    "callSequenceNumber": 7,
+                },
+            }
+        )
+
+        self.assertEqual(coordinator.active_session_id, "42")
+        self.assertEqual(coordinator.called_peer, "100")
+        self.assertEqual(coordinator.call_state, "ringing")
+        self.assertTrue(coordinator.ring_active)
+
+    async def test_process_call_session_state_event_clears_ring_and_session_on_idle(self) -> None:
+        coordinator_module = self.coordinator_module
+
+        class FakeAPI:
+            async def async_get_system_info(self):
+                return {"model": "2N"}
+
+            async def async_get_call_status(self):
+                return {"state": "idle", "sessions": []}
+
+        hass = types.SimpleNamespace()
+        coordinator = coordinator_module.TwoNIntercomCoordinator(hass, FakeAPI())
+
+        data = await coordinator._async_update_data()
+        coordinator.data = data
+
+        coordinator._process_log_event(
+            {
+                "event": "CallSessionStateChanged",
+                "params": {
+                    "direction": "incoming",
+                    "state": "ringing",
+                    "address": "sip:100@example.com",
+                    "sessionNumber": 42,
+                    "callSequenceNumber": 7,
+                },
+            }
+        )
+        self.assertEqual(coordinator.active_session_id, "42")
+        self.assertTrue(coordinator.ring_active)
+
+        coordinator._process_log_event(
+            {
+                "event": "CallSessionStateChanged",
+                "params": {
+                    "direction": "incoming",
+                    "state": "idle",
+                    "sessionNumber": 42,
+                    "callSequenceNumber": 7,
+                },
+            }
+        )
+
+        self.assertIsNone(coordinator.active_session_id)
+        self.assertEqual(coordinator.call_state, "idle")
+        self.assertFalse(coordinator.ring_active)
+
     async def test_stop_log_listener_unsubscribes_active_channel(self) -> None:
         coordinator_module = self.coordinator_module
 

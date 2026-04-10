@@ -153,6 +153,20 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
 
         return None
 
+    @staticmethod
+    def _extract_first_nonempty_string(params: dict[str, Any], *keys: str) -> str | None:
+        """Return the first non-empty string value for any of the provided keys."""
+        for key in keys:
+            raw_value = params.get(key)
+            if raw_value is None:
+                continue
+
+            normalized_value = str(raw_value).strip()
+            if normalized_value:
+                return normalized_value
+
+        return None
+
     def _process_log_event(self, event: dict[str, Any]) -> bool:
         """Apply a supported log event to coordinator state."""
         if not isinstance(event, dict):
@@ -174,16 +188,23 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
         if not state:
             return False
 
-        raw_session_id = params.get("session")
-        session_id: str | None = None
-        if raw_session_id is not None:
-            normalized_session_id = str(raw_session_id).strip()
-            if normalized_session_id:
-                session_id = normalized_session_id
+        if event_name == "CallSessionStateChanged":
+            session_id = self._extract_first_nonempty_string(
+                params, "sessionNumber", "session"
+            )
+            raw_peer = self._extract_first_nonempty_string(
+                params, "address", "peer"
+            )
+        else:
+            session_id = self._extract_first_nonempty_string(
+                params, "session", "sessionNumber"
+            )
+            raw_peer = self._extract_first_nonempty_string(
+                params, "peer", "address"
+            )
 
-        raw_peer = params.get("peer") or params.get("address")
         if raw_peer is not None:
-            self._last_called_peer = self._normalize_peer(str(raw_peer))
+            self._last_called_peer = self._normalize_peer(raw_peer)
 
         direction = str(params.get("direction") or "").strip().lower()
         active_states = self._RING_STATES | {"active", "connected"}
