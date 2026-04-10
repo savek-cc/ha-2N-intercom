@@ -11,6 +11,7 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -39,6 +40,17 @@ def _port_exists(
     return False
 
 
+def _switch_exists(payload: dict[str, Any], switch_number: int) -> bool:
+    """Return True when the cached switch payload contains the requested switch."""
+    switches = payload.get("switches") or []
+    for switch in switches:
+        if not isinstance(switch, dict):
+            continue
+        if switch.get("switch") == switch_number:
+            return True
+    return False
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -55,6 +67,9 @@ async def async_setup_entry(
         "input1",
     ):
         entities.append(TwoNIntercomInput1Sensor(coordinator, config_entry))
+
+    if _switch_exists(coordinator.switch_caps, 1):
+        entities.append(TwoNIntercomRelay1ActiveSensor(coordinator, config_entry))
 
     async_add_entities(
         entities,
@@ -181,6 +196,56 @@ class TwoNIntercomInput1Sensor(
     def is_on(self) -> bool:
         """Return true if input 1 is active."""
         return self._is_port_on(self.coordinator.io_status)
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        return self.coordinator.last_update_success
+
+
+class TwoNIntercomRelay1ActiveSensor(
+    CoordinatorEntity[TwoNIntercomCoordinator], BinarySensorEntity
+):
+    """Representation of the relay 1 active state."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_has_entity_name = True
+    _attr_name = "Relay 1 active"
+
+    def __init__(
+        self,
+        coordinator: TwoNIntercomCoordinator,
+        config_entry: ConfigEntry,
+    ) -> None:
+        """Initialize the relay sensor."""
+        super().__init__(coordinator)
+
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_relay1_active"
+
+    @property
+    def device_info(self) -> dict[str, Any]:
+        """Return device information about this relay sensor."""
+        name = self._config_entry.options.get(
+            "name",
+            self._config_entry.data.get("name", "2N Intercom"),
+        )
+        return self.coordinator.get_device_info(self._config_entry.entry_id, name)
+
+    @staticmethod
+    def _is_switch_active(switch_status: dict[str, Any]) -> bool:
+        switches = switch_status.get("switches") or []
+        for switch in switches:
+            if not isinstance(switch, dict):
+                continue
+            if switch.get("switch") == 1:
+                return switch.get("active") in (1, True, "1", "on", "true")
+        return False
+
+    @property
+    def is_on(self) -> bool:
+        """Return true if relay 1 is active."""
+        return self._is_switch_active(self.coordinator.switch_status)
 
     @property
     def available(self) -> bool:

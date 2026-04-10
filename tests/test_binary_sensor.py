@@ -57,6 +57,14 @@ def _install_homeassistant_stubs() -> None:
     core.HomeAssistant = object
     sys.modules["homeassistant.core"] = core
 
+    entity = types.ModuleType("homeassistant.helpers.entity")
+
+    class EntityCategory:
+        DIAGNOSTIC = "diagnostic"
+
+    entity.EntityCategory = EntityCategory
+    sys.modules["homeassistant.helpers.entity"] = entity
+
     entity_platform = types.ModuleType("homeassistant.helpers.entity_platform")
     entity_platform.AddEntitiesCallback = object
     sys.modules["homeassistant.helpers.entity_platform"] = entity_platform
@@ -100,9 +108,13 @@ class FakeCoordinator:
         *,
         io_caps: dict[str, object] | None = None,
         io_status: dict[str, object] | None = None,
+        switch_caps: dict[str, object] | None = None,
+        switch_status: dict[str, object] | None = None,
     ) -> None:
         self.io_caps = io_caps or {}
         self.io_status = io_status or {}
+        self.switch_caps = switch_caps or {}
+        self.switch_status = switch_status or {}
         self.last_update_success = True
 
     def get_device_info(self, entry_id, name):
@@ -184,6 +196,44 @@ class BinarySensorPlatformTests(unittest.IsolatedAsyncioTestCase):
             ["entry-1_doorbell"],
         )
 
+    async def test_setup_entry_adds_relay_sensor_when_switch1_is_present(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator(
+            switch_caps={
+                "switches": [
+                    {"switch": 1, "enabled": True},
+                ]
+            },
+            switch_status={
+                "switches": [
+                    {"switch": 1, "active": False},
+                ]
+            },
+        )
+        entry = FakeConfigEntry("entry-1", {"name": "Front Door"})
+
+        hass = types.SimpleNamespace(
+            data={
+                "2n_intercom": {
+                    entry.entry_id: {
+                        "coordinator": coordinator,
+                    }
+                }
+            }
+        )
+        added: list[object] = []
+
+        await binary_sensor_module.async_setup_entry(
+            hass,
+            entry,
+            lambda entities, update_before_add=False: added.extend(entities),
+        )
+
+        self.assertEqual(
+            [entity._attr_unique_id for entity in added],
+            ["entry-1_doorbell", "entry-1_relay1_active"],
+        )
+
     def test_input_sensor_uses_cached_io_status_payload(self) -> None:
         binary_sensor_module = self.binary_sensor_module
         coordinator = FakeCoordinator(
@@ -204,6 +254,29 @@ class BinarySensorPlatformTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(entity.is_on)
+
+    def test_relay_sensor_uses_cached_switch_status_payload(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator(
+            switch_caps={
+                "switches": [
+                    {"switch": 1, "enabled": True},
+                ]
+            },
+            switch_status={
+                "switches": [
+                    {"switch": 1, "active": True, "locked": False, "held": False},
+                ]
+            },
+        )
+        entity = binary_sensor_module.TwoNIntercomRelay1ActiveSensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Front Door"}),
+        )
+
+        self.assertTrue(entity.is_on)
+        self.assertEqual(entity._attr_unique_id, "entry-1_relay1_active")
+        self.assertEqual(entity._attr_entity_category, "diagnostic")
 
 
 if __name__ == "__main__":
