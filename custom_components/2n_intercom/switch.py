@@ -23,6 +23,10 @@ from .const import (
 from .coordinator import TwoNIntercomCoordinator
 from .entity import TwoNIntercomEntity
 
+# Switch actions hit the device (relay trigger) so we serialise them per
+# platform; reads come from the coordinator and don't count toward this limit.
+PARALLEL_UPDATES = 1
+
 _LOGGER = logging.getLogger(__name__)
 
 

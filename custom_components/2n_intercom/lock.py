@@ -20,6 +20,10 @@ from .const import (
 from .coordinator import TwoNIntercomCoordinator
 from .entity import TwoNIntercomEntity
 
+# Lock actions hit the device (relay trigger) so we serialise them per
+# platform; reads come from the coordinator and don't count toward this limit.
+PARALLEL_UPDATES = 1
+
 
 async def async_setup_entry(
     hass: HomeAssistant,

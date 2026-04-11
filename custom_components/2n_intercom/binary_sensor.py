@@ -17,6 +17,11 @@ from .const import DOMAIN
 from .coordinator import TwoNIntercomCoordinator
 from .entity import TwoNIntercomEntity
 
+# Entities are pure consumers of the coordinator's cached data and never hit
+# the device on async_update, so unlimited concurrency is the right answer per
+# the HA quality-scale `parallel-updates` rule.
+PARALLEL_UPDATES = 0
+
 _LOGGER = logging.getLogger(__name__)
 
 

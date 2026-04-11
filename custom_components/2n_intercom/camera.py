@@ -19,6 +19,11 @@ from .const import (
 )
 from .coordinator import TwoNIntercomCoordinator
 
+# Snapshots are served from the coordinator's cache and the live MJPEG stream
+# is proxied by the core MjpegCamera helper, so the camera platform never hits
+# the device on async_update — unlimited concurrency is correct here.
+PARALLEL_UPDATES = 0
+
 _LOGGER = logging.getLogger(__name__)
 
 

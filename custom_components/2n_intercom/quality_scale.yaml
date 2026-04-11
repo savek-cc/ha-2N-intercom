@@ -1,0 +1,96 @@
+rules:
+  # Bronze
+  action-setup: done
+  appropriate-polling: done
+  brands:
+    status: exempt
+    comment: |
+      This is a community custom integration distributed via HACS; brand
+      assets live in the HACS repo rather than home-assistant/brands.
+  common-modules: done
+  config-flow: done
+  config-flow-test-coverage: done
+  dependency-transparency: done
+  docs-actions: todo
+  docs-high-level-description: done
+  docs-installation-instructions: done
+  docs-removal-instructions: todo
+  entity-event-setup:
+    status: exempt
+    comment: |
+      Entities consume coordinator updates and do not subscribe to bus events
+      directly.
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: todo
+  test-before-configure: done
+  test-before-setup: done
+  unique-config-entry: done
+
+  # Silver
+  action-exceptions: done
+  config-entry-unloading: done
+  docs-configuration-parameters: todo
+  docs-installation-parameters: todo
+  entity-unavailable: done
+  integration-owner: done
+  log-when-unavailable: done
+  parallel-updates: done
+  reauthentication-flow: done
+  test-coverage: done
+
+  # Gold
+  devices: done
+  diagnostics: todo
+  discovery-update-info:
+    status: exempt
+    comment: |
+      The intercom is configured with a static host/IP and does not advertise
+      itself for discovery updates.
+  discovery:
+    status: exempt
+    comment: |
+      The 2N IP intercom does not broadcast a discoverable mDNS/SSDP service
+      that maps to a unique device id, so the integration uses manual setup.
+  docs-data-update: todo
+  docs-examples: todo
+  docs-known-limitations: todo
+  docs-supported-devices: todo
+  docs-supported-functions: todo
+  docs-troubleshooting: todo
+  docs-use-cases: todo
+  dynamic-devices:
+    status: exempt
+    comment: |
+      One config entry maps to exactly one intercom device; there are no
+      dynamically appearing sub-devices.
+  entity-category: done
+  entity-device-class: done
+  entity-disabled-by-default:
+    status: exempt
+    comment: |
+      All entities exposed by this integration are immediately useful and
+      none should be hidden by default.
+  entity-translations: todo
+  exception-translations: todo
+  icon-translations:
+    status: exempt
+    comment: |
+      All entities derive their icon from a device class or platform default;
+      no custom icon mapping is needed.
+  reconfiguration-flow: done
+  repair-issues:
+    status: exempt
+    comment: |
+      No persistent failure modes that require an actionable repair issue —
+      authentication problems are surfaced through the reauth flow instead.
+  stale-devices:
+    status: exempt
+    comment: |
+      One config entry maps to exactly one device; the device is removed when
+      the entry is removed.
+
+  # Platinum
+  async-dependency: done
+  inject-websession: todo
+  strict-typing: todo

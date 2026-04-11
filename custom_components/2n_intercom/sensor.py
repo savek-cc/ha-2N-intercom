@@ -13,6 +13,11 @@ from .const import DOMAIN
 from .coordinator import TwoNIntercomCoordinator
 from .entity import TwoNIntercomEntity
 
+# Sensors are pure consumers of the coordinator's cached payloads and never
+# hit the device on async_update, so unlimited concurrency is correct per the
+# HA quality-scale `parallel-updates` rule.
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,

@@ -8,6 +8,8 @@
   "integration_type": "device",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/mastalir1980/ha-2N-intercom/issues",
+  "loggers": ["custom_components.2n_intercom"],
+  "quality_scale": "silver",
   "requirements": [],
   "version": "1.1.0"
 }
