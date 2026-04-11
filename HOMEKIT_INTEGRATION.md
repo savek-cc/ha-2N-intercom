@@ -43,7 +43,7 @@ The integration also supports **reauth** (auto-triggered on credential failure) 
 
 ### 2. Relay type and legacy lock mapping
 
-Relay-based installs store door/gate behaviour per configured relay. The legacy no-relay path still uses door-type semantics through the fallback lock entity and the options flow.
+Relay-based installs store door/gate behaviour per configured relay — door relays surface as switches, gate relays as covers. When no relays are configured the integration falls back to a single legacy lock entity whose `device_class` is set from the same door/gate option, so existing pre-1.0 setups still get a correctly-typed HomeKit accessory.
 
 ### 3. HomeKit entity mapping
 

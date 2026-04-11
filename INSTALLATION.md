@@ -119,7 +119,7 @@ Recommended pattern: pair `hangup_call` with the call-state sensor's `active_ses
 
 ### Setup fails with "Cannot Connect"
 - Verify host/port and try HTTP if HTTPS verification is failing
-- The 2N HTTP API uses **two auth schemes** (Basic for `camera/phone/call/system`, Digest for `switch/io/log`). The same credentials need to work for both — check the 2N web UI under **Services → HTTP API → Account**
+- The 2N HTTP API exposes a **per-service-group** auth setting in the device web UI under **Services → HTTP API**. Each service group (Camera, Switch, I/O, Phone, Call, Log) can be set to None, Basic, or Digest independently. The integration handles whatever combination the operator has chosen, but the configured username/password must be valid for **every** group it talks to
 
 ### Reauth notification keeps reappearing
 - Credentials really are wrong, or the account is locked on the device. Clear it via the 2N web UI, then complete the reauth flow

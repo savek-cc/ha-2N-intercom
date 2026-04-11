@@ -56,16 +56,16 @@ Verified on a 2N IP Verso with firmware `2.50.0.76.2`:
 
 Helper: [`api.validate_mjpeg_fps`](custom_components/2n_intercom/api.py).
 
-### Dual authentication scheme
+### Authentication
 
-The 2N HTTP API splits authentication between endpoint families. The integration's HTTP client handles this transparently — **don't try to "simplify" `_async_request`**.
+The 2N HTTP API exposes a **per-service-group** authentication setting in the device web UI under **Services → HTTP API**. Each service group (Camera, Switch, I/O, Phone, Call, Log, …) can be set to **None / Basic / Digest** independently, so a single account can end up answering some endpoint families with Basic and others with Digest depending on how the operator has configured the device.
 
-| Endpoint family | Auth |
-|---|---|
-| `camera/*`, `phone/*`, `system/info`, `call/status` | HTTP Basic |
-| `switch/*`, `io/*`, `log/*`, most control endpoints | HTTP Digest |
+The integration handles every combination transparently:
 
-The client uses Digest by default and falls back to Basic when the device responds with `401 + WWW-Authenticate: Basic`.
+- The HTTP client uses `aiohttp`'s `DigestAuthMiddleware` (with `preemptive=False`) so it answers Digest challenges automatically.
+- When the device answers a request with `401 + WWW-Authenticate: Basic`, the client retries the same request with Basic auth.
+
+The same username and password must work for every service group the integration touches. **Don't try to "simplify" `_async_request`** by hard-coding one scheme — the dual-auth path exists exactly because the device exposes the choice per service group.
 
 ## Architecture
 
@@ -75,15 +75,12 @@ The client uses Digest by default and falls back to Basic when the device respon
 - **`TwoNIntercomEntity`** base class shared by all platforms — single source for `device_info`, `available`, and `_attr_has_entity_name`
 - Platform-based: `camera`, `binary_sensor`, `switch`, `cover`, `lock`, `sensor`
 
-For deeper architecture notes see [ARCHITECTURE.md](ARCHITECTURE.md).
-
 ## Manual
 
 - Install and setup: [INSTALLATION.md](INSTALLATION.md)
 - HomeKit details: [HOMEKIT_INTEGRATION.md](HOMEKIT_INTEGRATION.md)
-- Quick reference: [QUICK_REFERENCE.md](QUICK_REFERENCE.md)
+- Implementation overview: [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)
 - Release notes: [CHANGELOG.md](CHANGELOG.md)
-- MJPEG roadmap: [docs/superpowers/plans/2026-04-10-2n-ip-verso-mjpeg-roadmap.md](docs/superpowers/plans/2026-04-10-2n-ip-verso-mjpeg-roadmap.md)
 
 ## Installation
 
@@ -91,7 +88,7 @@ For deeper architecture notes see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 1. Open HACS → Integrations
 2. Three-dot menu → Custom repositories
-3. Add `https://github.com/mastalir1980/ha-2N-intercom` as an integration
+3. Add `https://github.com/savek-cc/ha-2N-intercom` as an integration
 4. Install **2N Intercom**
 5. Restart Home Assistant
 
@@ -171,24 +168,26 @@ Example actionable-notification snippet:
 
 ## 2N API Endpoints Used
 
-| Endpoint | Auth | Purpose |
-|---|---|---|
-| `/api/system/info` | Basic | Device identity |
-| `/api/call/status` | Basic | Polling fallback for ring detection |
-| `/api/call/answer`, `/api/call/hangup` | Basic | Service backends |
-| `/api/log/subscribe`, `/api/log/pull`, `/api/log/unsubscribe` | Digest | Push-driven event stream |
-| `/api/switch/caps`, `/api/switch/status`, `/api/switch/ctrl` | Digest | Relay control + cached state |
-| `/api/io/caps`, `/api/io/status` | Digest | Cached input state |
-| `/api/phone/status` | Basic | SIP registration sensor |
-| `/api/camera/caps` | Basic | Discover MJPEG capability + resolutions |
-| `/api/camera/snapshot` (with/without `fps`) | Basic | JPEG snapshot + MJPEG live view |
-| RTSP stream | RTSP creds | Optional, only when device exposes it |
+The integration negotiates Basic vs Digest per request — see the **Authentication** section above.
+
+| Endpoint | Purpose |
+|---|---|
+| `/api/system/info` | Device identity |
+| `/api/call/status` | Polling fallback for ring detection |
+| `/api/call/answer`, `/api/call/hangup` | Service backends |
+| `/api/log/subscribe`, `/api/log/pull`, `/api/log/unsubscribe` | Push-driven event stream |
+| `/api/switch/caps`, `/api/switch/status`, `/api/switch/ctrl` | Relay control + cached state |
+| `/api/io/caps`, `/api/io/status` | Cached input state |
+| `/api/phone/status` | SIP registration sensor |
+| `/api/camera/caps` | Discover MJPEG capability + resolutions |
+| `/api/camera/snapshot` (with/without `fps`) | JPEG snapshot + MJPEG live view |
+| RTSP stream | Optional, only when the device licence exposes it |
 
 ## Troubleshooting
 
 ### Cannot Connect during setup
 - Verify IP/port/credentials and protocol; firewall; SSL trust if HTTPS
-- The HA log will show whether the integration is hitting a Basic-only or Digest-only endpoint — credentials need to be valid for both
+- The same username and password must be valid for **both** Basic and Digest auth on the device — if the device rejects one of the schemes, every endpoint that uses it will fail. Configure the account under **Services → HTTP API → Account** on the 2N web UI
 
 ### Camera entity has no live view
 - Confirm `camera/caps` returns `mjpeg.fps_min`/`fps_max` (the integration's transport probe runs once at setup; reload the entry after changing camera caps on the device)
@@ -232,32 +231,14 @@ custom_components/2n_intercom/
 ### Tests
 
 ```bash
-python3 -m unittest discover -s tests -t tests   # 53/53
+python3 -m unittest discover -s tests -t tests   # 75/75
 python3 validate.py                               # manifest + HACS compliance
 python3 -m py_compile custom_components/2n_intercom/*.py
 ```
 
 ## Version History
 
-### 1.1.0
-- HA 2026.4+ compliance: imported `persistent_notification` API; OptionsFlow no longer stores `config_entry`; coordinator constructed with `config_entry` kwarg
-- Manifest: `requirements: []`, `iot_class: local_push`, `integration_type: device`
-- Camera switched to `MjpegCamera`; credentials are no longer embedded in stream URLs
-- Push-driven log subscription with re-subscribe and exponential backoff
-- Reauth flow (`async_step_reauth`) and reconfigure flow (`async_step_reconfigure`)
-- New `2n_intercom.answer_call` / `2n_intercom.hangup_call` services with `target.config_entry`
-- New diagnostic sensors (`sip_registration`, `call_state`) and real-state binary sensors (`input_1`, `relay_1_active`)
-- Static caps (switch / io / camera transport) resolved once at setup
-- Shared `TwoNIntercomEntity` base; deduped `device_info` across all platforms
-- HACS metadata bumped to HA 2026.4.0
-
-### 1.0.1
-- Fix HomeKit entity exposure when relays are configured
-- Ensure relay entities load from options
-- Document MJPEG device baseline
-
-### 1.0.0
-- Initial public release
+See [CHANGELOG.md](CHANGELOG.md) for the full release notes.
 
 ## License
 
@@ -265,8 +246,8 @@ See [LICENSE](LICENSE).
 
 ## Credits
 
-Created for the Home Assistant community. Developed by mastalir1980; HA 2026.4+ remediation by the dsm-docker fork.
+Originally created by [mastalir1980](https://github.com/mastalir1980/ha-2N-intercom) for the Home Assistant community. The HA 2026.4+ remediation, MJPEG-first camera, push-driven event handling, real-state status entities, answer/hangup services, and dual-auth client live in this [savek-cc](https://github.com/savek-cc/ha-2N-intercom) fork.
 
 ## Support
 
-Open an issue on GitHub.
+Open an issue on the [savek-cc fork](https://github.com/savek-cc/ha-2N-intercom/issues).

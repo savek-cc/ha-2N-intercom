@@ -10,7 +10,7 @@ The remediation pass that produced the current shape (version `1.1.0`) added MJP
 
 ### 1. Core architecture
 
-- `api.py` — async aiohttp client with **dual auth** (HTTP Basic for `camera/phone/call/system`, HTTP Digest for `switch/io/log` via `aiohttp` `DigestAuthMiddleware` with Basic fallback)
+- `api.py` — async aiohttp client with **dual auth**: `DigestAuthMiddleware(preemptive=False)` answers Digest challenges automatically and falls back to Basic when the device returns `401 + WWW-Authenticate: Basic`. The 2N firmware exposes a per-service-group auth setting in the device web UI, so the same client transparently handles whatever combination of None/Basic/Digest the operator has configured
 - `coordinator.py` — `DataUpdateCoordinator` with status polling, static-caps caching, and a background **log subscription loop** with re-subscribe + exponential backoff
 - `entity.py` — shared `TwoNIntercomEntity` base class providing `device_info`, `available`, and `_attr_has_entity_name` for every platform
 - `__init__.py` — entry setup, log-listener lifecycle, service registration
@@ -66,19 +66,21 @@ Validation happens against `system/info` so credential mistakes fail at the form
 
 ### 4. 2N API endpoints in use
 
-| Endpoint | Auth | Purpose |
-|---|---|---|
-| `/api/system/info` | Basic | Device identity, credential validation |
-| `/api/call/status` | Basic | Polling fallback for ring detection |
-| `/api/call/answer`, `/api/call/hangup` | Basic | Service backends |
-| `/api/log/subscribe`, `/api/log/pull`, `/api/log/unsubscribe` | Digest | Push-driven event channel |
-| `/api/log/caps` | Digest | Discover supported event names |
-| `/api/switch/caps`, `/api/switch/status`, `/api/switch/ctrl` | Digest | Relay caps + cached state + control |
-| `/api/io/caps`, `/api/io/status` | Digest | Input caps + cached state |
-| `/api/phone/status` | Basic | SIP registration sensor |
-| `/api/camera/caps` | Basic | Discover MJPEG fps range and resolutions |
-| `/api/camera/snapshot` | Basic | JPEG snapshot + MJPEG live view (`fps=1..15`) |
-| RTSP stream | RTSP creds | Optional, only when licensed |
+The auth scheme for each endpoint is determined by the 2N device's web-UI **Services → HTTP API** settings (per service group). The integration negotiates Basic vs Digest per request — see the **Architecture** section above.
+
+| Endpoint | Purpose |
+|---|---|
+| `/api/system/info` | Device identity, credential validation |
+| `/api/call/status` | Polling fallback for ring detection |
+| `/api/call/answer`, `/api/call/hangup` | Service backends |
+| `/api/log/subscribe`, `/api/log/pull`, `/api/log/unsubscribe` | Push-driven event channel |
+| `/api/log/caps` | Discover supported event names |
+| `/api/switch/caps`, `/api/switch/status`, `/api/switch/ctrl` | Relay caps + cached state + control |
+| `/api/io/caps`, `/api/io/status` | Input caps + cached state |
+| `/api/phone/status` | SIP registration sensor |
+| `/api/camera/caps` | Discover MJPEG fps range and resolutions |
+| `/api/camera/snapshot` | JPEG snapshot + MJPEG live view (`fps=1..15`) |
+| RTSP stream | Optional, only when licensed |
 
 ### 5. Services
 
@@ -110,7 +112,7 @@ Both translations cover all config / options / reauth / reconfigure / abort / pr
 - All Python files compile cleanly (`python3 -m py_compile`)
 - All JSON files validate
 - `validate.py` enforces manifest compliance (`requirements: []`, `iot_class: local_push`, `integration_type: device`, `config_flow: true`, `version` present) and HACS HA min version (`2026.4.x`)
-- 53/53 unit tests passing (`unittest.IsolatedAsyncioTestCase` + hand-rolled HA stubs, no `pytest-homeassistant-custom-component`)
+- 75/75 unit tests passing (`unittest.IsolatedAsyncioTestCase` + hand-rolled HA stubs, no `pytest-homeassistant-custom-component`)
 
 ## Entity summary
 
@@ -199,20 +201,20 @@ No data-model breakage; existing config entries load unchanged.
 ## Testing
 
 ```bash
-python3 -m unittest discover -s tests -t tests   # 53/53 (or higher with new test_config_flow.py)
+python3 -m unittest discover -s tests -t tests   # 75/75
 python3 validate.py                               # all green
 python3 -m py_compile custom_components/2n_intercom/*.py
 ```
 
-For end-to-end smoke testing against a real device, see [TESTING_GUIDE.md](TESTING_GUIDE.md).
+End-to-end live verification is done with the standalone scripts under the upstream working tree (e.g. `verify_2n_hangup_live.py`, `verify_door_open_hangup.py`) — they hit a real device, drive a doorbell ring via `/api/sim/keypress`, and validate the full ring → answer → hangup loop against HA.
 
 ## Statistics (as of 1.1.0)
 
 - **Platforms:** 6 (camera, binary_sensor, sensor, switch, cover, lock)
-- **APIs:** 11 endpoint families (Basic + Digest)
+- **APIs:** 11 endpoint families (auth scheme determined by device per service group)
 - **Services:** 2 (`answer_call`, `hangup_call`)
 - **Languages:** 2 (English, Czech)
-- **Tests:** 53+ unit tests
+- **Tests:** 75 unit tests
 - **HA target:** 2026.4.0+
 
 ## Conclusion
@@ -223,4 +225,4 @@ The integration is feature-complete for the single-family-house IP Verso baselin
 
 *Status:* Production-ready against 2N IP Verso firmware `2.50.0.76.2`
 *Version:* 1.1.0
-*Repository:* mastalir1980/ha-2N-intercom (HA 2026.4+ remediation in the dsm-docker fork)
+*Repository:* [savek-cc/ha-2N-intercom](https://github.com/savek-cc/ha-2N-intercom) (fork of [mastalir1980/ha-2N-intercom](https://github.com/mastalir1980/ha-2N-intercom))
