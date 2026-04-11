@@ -13,6 +13,9 @@ CONF_DOOR_TYPE = "door_type"
 CONF_CALLED_ID = "called_id"
 CALLED_ID_ALL = "__all__"
 
+# General tuning keys
+CONF_SCAN_INTERVAL = "scan_interval"
+
 # Camera configuration keys
 CONF_LIVE_VIEW_MODE = "live_view_mode"
 CONF_MJPEG_WIDTH = "mjpeg_width"
@@ -49,8 +52,10 @@ DEFAULT_ENABLE_CAMERA = True
 DEFAULT_ENABLE_DOORBELL = True
 DEFAULT_RELAY_COUNT = 1
 DEFAULT_SCAN_INTERVAL = 5  # seconds
-DEFAULT_PULSE_DURATION = 2000  # milliseconds
-DEFAULT_GATE_DURATION = 15000  # milliseconds
+SCAN_INTERVAL_MIN = 2  # seconds — below this we hammer the device for no benefit
+SCAN_INTERVAL_MAX = 300  # seconds — 5 minutes is a sane upper bound for ring detection
+DEFAULT_PULSE_DURATION = 2000  # milliseconds — door default
+DEFAULT_GATE_DURATION = 15000  # milliseconds — gate default
 
 # Camera live view modes
 LIVE_VIEW_MODE_AUTO = "auto"
@@ -70,6 +75,7 @@ DEFAULT_CAMERA_MJPEG_WIDTH = 1280
 DEFAULT_CAMERA_MJPEG_HEIGHT = 960
 DEFAULT_CAMERA_MJPEG_FPS = 10
 DEFAULT_CAMERA_SOURCE = "internal"
+CAMERA_SOURCES = ["internal", "external"]
 CAMERA_MJPEG_FPS_MIN = 1
 CAMERA_MJPEG_FPS_MAX = 15
 

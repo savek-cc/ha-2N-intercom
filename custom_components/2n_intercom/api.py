@@ -1324,13 +1324,15 @@ class TwoNIntercomAPI:
         mjpeg_width: int | None = None,
         mjpeg_height: int | None = None,
         mjpeg_fps: int | None = None,
+        camera_source: str | None = None,
     ) -> CameraTransportInfo:
         """Return a normalized transport-info object for the camera entity.
 
-        ``mjpeg_width``/``mjpeg_height``/``mjpeg_fps`` are optional overrides
-        sourced from the integration's options flow. When omitted the function
-        falls back to the module-level ``DEFAULT_CAMERA_MJPEG_*`` values so the
-        existing call sites and unit tests keep working unchanged.
+        ``mjpeg_width``/``mjpeg_height``/``mjpeg_fps``/``camera_source`` are
+        optional overrides sourced from the integration's options flow. When
+        omitted the function falls back to the module-level ``DEFAULT_CAMERA_*``
+        values (or the device's preferred source) so existing call sites and
+        unit tests keep working unchanged.
         """
         requested_width = (
             mjpeg_width if mjpeg_width is not None else DEFAULT_CAMERA_MJPEG_WIDTH
@@ -1341,6 +1343,11 @@ class TwoNIntercomAPI:
         requested_fps = validate_mjpeg_fps(
             mjpeg_fps if mjpeg_fps is not None else DEFAULT_CAMERA_MJPEG_FPS
         )
+        requested_source = (
+            camera_source.strip()
+            if isinstance(camera_source, str) and camera_source.strip()
+            else None
+        )
 
         if (
             self._camera_transport_resolved
@@ -1349,11 +1356,25 @@ class TwoNIntercomAPI:
             and self._camera_transport_info.mjpeg_width == requested_width
             and self._camera_transport_info.mjpeg_height == requested_height
             and self._camera_transport_info.mjpeg_fps == requested_fps
+            and (
+                requested_source is None
+                or self._camera_transport_info.source == requested_source
+            )
         ):
             return self._camera_transport_info
 
         capabilities = await self.async_get_camera_caps(force_refresh=force_refresh)
-        source = capabilities.preferred_source()
+        # Honour an explicit source override only when the device actually
+        # advertises it; otherwise fall back to whatever the caps endpoint
+        # marks as preferred. The device-side resolver still rejects unknown
+        # sources, so this guard mainly prevents a silent typo from breaking
+        # the snapshot URL builders.
+        if requested_source is not None and (
+            not capabilities.sources or requested_source in capabilities.sources
+        ):
+            source = requested_source
+        else:
+            source = capabilities.preferred_source()
         resolved_width, resolved_height = self._select_mjpeg_resolution(
             capabilities,
             width=requested_width,
@@ -1472,18 +1493,26 @@ class TwoNIntercomAPI:
             return False
 
     async def async_get_snapshot(
-        self, width: int | None = None, height: int | None = None
+        self,
+        width: int | None = None,
+        height: int | None = None,
+        source: str | None = None,
     ) -> bytes | None:
         """Get camera snapshot from /api/camera/snapshot."""
         try:
-            params: dict[str, Any] = {"source": DEFAULT_CAMERA_SOURCE}
+            resolved_source = (
+                source.strip()
+                if isinstance(source, str) and source.strip()
+                else DEFAULT_CAMERA_SOURCE
+            )
+            params: dict[str, Any] = {"source": resolved_source}
             if width is None:
                 width = 640
             if height is None:
                 height = 480
             params["width"] = width
             params["height"] = height
-            
+
             async with async_timeout.timeout(API_TIMEOUT):
                 async with self._async_request(
                     "GET",
@@ -1520,7 +1549,7 @@ class TwoNIntercomAPI:
                                 error.format(),
                             )
                             return await self.async_get_snapshot(
-                                width=640, height=480
+                                width=640, height=480, source=resolved_source
                             )
 
                         if error is not None:

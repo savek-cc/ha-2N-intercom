@@ -45,14 +45,22 @@
         "data": {
           "relay_name": "Název relé",
           "relay_number": "Číslo relé",
-          "relay_device_type": "Typ zařízení",
-          "relay_pulse_duration": "Doba pulsu (milisekundy)"
+          "relay_device_type": "Typ zařízení"
         },
         "data_description": {
           "relay_name": "Zobrazený název relé",
           "relay_number": "Fyzické číslo relé na zařízení (1-4)",
-          "relay_device_type": "Dveře vytvoří spínač, vrata vytvoří kryt",
-          "relay_pulse_duration": "Jak dlouho se relé sepne (ms)"
+          "relay_device_type": "Dveře vytvoří spínač, vrata vytvoří kryt"
+        }
+      },
+      "relay_pulse": {
+        "title": "Nastavení 2N Intercom - Puls relé {relay_number}",
+        "description": "Jak dlouho má relé {relay_number} sepnout ({device_type}). Pro dveřní zámky obvykle ~2000 ms, pro křídlová vrata ~15000 ms.",
+        "data": {
+          "relay_pulse_duration": "Doba pulsu (milisekundy)"
+        },
+        "data_description": {
+          "relay_pulse_duration": "Délka spínacího pulsu odeslaného relé (ms)"
         }
       }
     },
@@ -90,10 +98,20 @@
       "device": {
         "title": "Možnosti 2N Intercom - Zařízení",
         "description": "Upravte funkce zařízení",
+        "data": {
+          "name": "Název",
+          "enable_camera": "Povolit kameru",
+          "enable_doorbell": "Povolit zvonek",
+          "scan_interval": "Interval dotazování (sekundy)",
+          "relay_count": "Počet relé",
+          "door_type": "Typ dveří (starší)",
+          "called_id": "Volaný účet (peer)"
+        },
         "data_description": {
           "name": "Zobrazený název v Home Assistant",
           "enable_camera": "Vytvoří entitu kamery",
           "enable_doorbell": "Vytvoří entitu zvonku",
+          "scan_interval": "Jak často integrace dotazuje zařízení na stav (2-300 s). Nižší hodnoty rychleji zachytí zvonění, ale více zatěžují zařízení.",
           "relay_count": "Kolik relé chcete nastavit (0-4)",
           "door_type": "Legacy typ zámku (dveře nebo vrata)",
           "called_id": "Vyberte účet, na který se zvoní. Všechny hovory = zvonění pro všechna tlačítka."
@@ -104,12 +122,14 @@
         "description": "Vyladění video streamu z 2N kamery v Home Assistantu. Snížením rozlišení a snímkové frekvence MJPEG výrazně ušetříte přenos dat na nástěnkách, kde je kamera trvale viditelná.",
         "data": {
           "live_view_mode": "Režim živého náhledu",
+          "camera_source": "Zdroj kamery",
           "mjpeg_width": "Šířka MJPEG (pixely)",
           "mjpeg_height": "Výška MJPEG (pixely)",
           "mjpeg_fps": "Snímky za sekundu (MJPEG)"
         },
         "data_description": {
           "live_view_mode": "auto upřednostní RTSP, pak MJPEG, případně jen JPEG snímky",
+          "camera_source": "Který senzor zařízení použít — internal je vestavěná kamera, external je sekundární modul (pokud je osazen)",
           "mjpeg_width": "Šířka MJPEG streamu vyžádaného od zařízení (např. 640)",
           "mjpeg_height": "Výška MJPEG streamu vyžádaného od zařízení (např. 480)",
           "mjpeg_fps": "Snímky za sekundu pro MJPEG stream (1-15)"
@@ -118,11 +138,25 @@
       "relay": {
         "title": "Možnosti 2N Intercom - Relé {relay_number}",
         "description": "Upravte relé {relay_number}",
+        "data": {
+          "relay_name": "Název relé",
+          "relay_number": "Číslo relé",
+          "relay_device_type": "Typ zařízení"
+        },
         "data_description": {
           "relay_name": "Zobrazený název relé",
           "relay_number": "Fyzické číslo relé na zařízení (1-4)",
-          "relay_device_type": "Dveře vytvoří spínač, vrata vytvoří kryt",
-          "relay_pulse_duration": "Jak dlouho se relé sepne (ms)"
+          "relay_device_type": "Dveře vytvoří spínač, vrata vytvoří kryt"
+        }
+      },
+      "relay_pulse": {
+        "title": "Možnosti 2N Intercom - Puls relé {relay_number}",
+        "description": "Jak dlouho má relé {relay_number} sepnout ({device_type}). Pro dveřní zámky obvykle ~2000 ms, pro křídlová vrata ~15000 ms.",
+        "data": {
+          "relay_pulse_duration": "Doba pulsu (milisekundy)"
+        },
+        "data_description": {
+          "relay_pulse_duration": "Délka spínacího pulsu odeslaného relé (ms)"
         }
       }
     }
@@ -140,6 +174,12 @@
         "rtsp": "Pouze RTSP",
         "mjpeg": "Pouze MJPEG",
         "jpeg_only": "Pouze JPEG snímky"
+      }
+    },
+    "camera_source": {
+      "options": {
+        "internal": "Internal (vestavěná kamera)",
+        "external": "External (sekundární modul)"
       }
     },
     "protocol": {

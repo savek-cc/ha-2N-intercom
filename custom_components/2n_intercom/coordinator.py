@@ -22,6 +22,8 @@ from .api import (
 )
 from .const import (
     CALLED_ID_ALL,
+    CAMERA_SOURCES,
+    CONF_CAMERA_SOURCE,
     CONF_LIVE_VIEW_MODE,
     CONF_MJPEG_FPS,
     CONF_MJPEG_HEIGHT,
@@ -537,6 +539,10 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
         if isinstance(mjpeg_fps, int) and mjpeg_fps > 0:
             overrides["mjpeg_fps"] = mjpeg_fps
 
+        camera_source = options.get(CONF_CAMERA_SOURCE)
+        if isinstance(camera_source, str) and camera_source.strip() in CAMERA_SOURCES:
+            overrides["camera_source"] = camera_source.strip()
+
         return overrides
 
     async def _async_update_data(self) -> TwoNIntercomData:
@@ -810,7 +816,7 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
             # Check cache to avoid excessive API calls
             current_time = datetime.now()
             requested_size = (width, height)
-            
+
             if (
                 self._snapshot_cache is not None
                 and self._snapshot_cache_time is not None
@@ -819,9 +825,18 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
             ):
                 _LOGGER.debug("Returning cached snapshot")
                 return self._snapshot_cache
-            
-            # Fetch new snapshot
-            snapshot = await self.api.async_get_snapshot(width=width, height=height)
+
+            # Pass the configured camera source through so users with an
+            # external camera module on the 2N device get snapshots from the
+            # right sensor — without it, ``api.async_get_snapshot`` would
+            # always fall back to ``DEFAULT_CAMERA_SOURCE = "internal"``.
+            transport_info = self._camera_transport_info
+            snapshot_source = (
+                transport_info.source if transport_info is not None else None
+            )
+            snapshot = await self.api.async_get_snapshot(
+                width=width, height=height, source=snapshot_source
+            )
             
             if snapshot:
                 self._snapshot_cache = snapshot

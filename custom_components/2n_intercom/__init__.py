@@ -16,12 +16,16 @@ from .const import (
     CONF_ENABLE_DOORBELL,
     CONF_PROTOCOL,
     CONF_RELAYS,
+    CONF_SCAN_INTERVAL,
     CONF_VERIFY_SSL,
     DEFAULT_ENABLE_CAMERA,
     DEFAULT_ENABLE_DOORBELL,
     DEFAULT_PROTOCOL,
+    DEFAULT_SCAN_INTERVAL,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
+    SCAN_INTERVAL_MAX,
+    SCAN_INTERVAL_MIN,
 )
 from .coordinator import TwoNIntercomCoordinator
 
@@ -265,9 +269,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         verify_ssl=data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
     )
 
+    # Honour the per-entry polling interval from the options flow when set,
+    # falling back to the module default. Out-of-bounds values are clamped so
+    # a hand-edited entry can't accidentally hammer the device or stall ring
+    # detection — the options-flow selector enforces the same range.
+    raw_scan_interval = data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    try:
+        scan_interval = int(raw_scan_interval)
+    except (TypeError, ValueError):
+        scan_interval = DEFAULT_SCAN_INTERVAL
+    scan_interval = max(SCAN_INTERVAL_MIN, min(scan_interval, SCAN_INTERVAL_MAX))
+
     coordinator = TwoNIntercomCoordinator(
         hass,
         api,
+        scan_interval=scan_interval,
         called_id=data.get(CONF_CALLED_ID),
         config_entry=entry,
     )
