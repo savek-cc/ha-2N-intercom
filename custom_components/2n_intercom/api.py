@@ -1321,36 +1321,58 @@ class TwoNIntercomAPI:
         *,
         requested_mode: str = DEFAULT_LIVE_VIEW_MODE,
         force_refresh: bool = False,
+        mjpeg_width: int | None = None,
+        mjpeg_height: int | None = None,
+        mjpeg_fps: int | None = None,
     ) -> CameraTransportInfo:
-        """Return a normalized transport-info object for the camera entity."""
+        """Return a normalized transport-info object for the camera entity.
+
+        ``mjpeg_width``/``mjpeg_height``/``mjpeg_fps`` are optional overrides
+        sourced from the integration's options flow. When omitted the function
+        falls back to the module-level ``DEFAULT_CAMERA_MJPEG_*`` values so the
+        existing call sites and unit tests keep working unchanged.
+        """
+        requested_width = (
+            mjpeg_width if mjpeg_width is not None else DEFAULT_CAMERA_MJPEG_WIDTH
+        )
+        requested_height = (
+            mjpeg_height if mjpeg_height is not None else DEFAULT_CAMERA_MJPEG_HEIGHT
+        )
+        requested_fps = validate_mjpeg_fps(
+            mjpeg_fps if mjpeg_fps is not None else DEFAULT_CAMERA_MJPEG_FPS
+        )
+
         if (
             self._camera_transport_resolved
             and not force_refresh
             and self._camera_transport_info.requested_mode == requested_mode
+            and self._camera_transport_info.mjpeg_width == requested_width
+            and self._camera_transport_info.mjpeg_height == requested_height
+            and self._camera_transport_info.mjpeg_fps == requested_fps
         ):
             return self._camera_transport_info
 
         capabilities = await self.async_get_camera_caps(force_refresh=force_refresh)
         source = capabilities.preferred_source()
-        mjpeg_width, mjpeg_height = self._select_mjpeg_resolution(
+        resolved_width, resolved_height = self._select_mjpeg_resolution(
             capabilities,
-            width=DEFAULT_CAMERA_MJPEG_WIDTH,
-            height=DEFAULT_CAMERA_MJPEG_HEIGHT,
+            width=requested_width,
+            height=requested_height,
         )
 
         rtsp_available = await self.async_probe_rtsp()
         mjpeg_authenticated_available = await self.async_probe_mjpeg(
             capabilities=capabilities,
-            width=mjpeg_width,
-            height=mjpeg_height,
-            fps=DEFAULT_CAMERA_MJPEG_FPS,
+            width=resolved_width,
+            height=resolved_height,
+            fps=requested_fps,
             source=source,
         )
         mjpeg_public_url_available = await self.async_probe_mjpeg_public(
             capabilities=capabilities,
-            width=mjpeg_width,
-            height=mjpeg_height,
-            fps=DEFAULT_CAMERA_MJPEG_FPS,
+            width=resolved_width,
+            height=resolved_height,
+            fps=requested_fps,
             source=source,
         )
         mjpeg_available = (
@@ -1374,9 +1396,9 @@ class TwoNIntercomAPI:
             mjpeg_public_url_available=mjpeg_public_url_available,
             jpeg_snapshot_available=True,
             capabilities=capabilities,
-            mjpeg_width=mjpeg_width,
-            mjpeg_height=mjpeg_height,
-            mjpeg_fps=DEFAULT_CAMERA_MJPEG_FPS,
+            mjpeg_width=resolved_width,
+            mjpeg_height=resolved_height,
+            mjpeg_fps=requested_fps,
             source=source,
         )
         self._camera_transport_resolved = resolved

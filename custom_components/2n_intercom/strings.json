@@ -119,6 +119,22 @@
           "called_id": "Select which account should ring. Choose All calls to ring on every button."
         }
       },
+      "camera": {
+        "title": "2N Intercom Options - Camera",
+        "description": "Tune how Home Assistant streams video from the 2N camera. Lower MJPEG resolution and frame rate dramatically reduce bandwidth on continuously visible dashboards.",
+        "data": {
+          "live_view_mode": "Live view mode",
+          "mjpeg_width": "MJPEG width (pixels)",
+          "mjpeg_height": "MJPEG height (pixels)",
+          "mjpeg_fps": "MJPEG frame rate (fps)"
+        },
+        "data_description": {
+          "live_view_mode": "auto picks RTSP if available, then MJPEG, then JPEG snapshots only",
+          "mjpeg_width": "Width of the MJPEG stream requested from the device (e.g. 640)",
+          "mjpeg_height": "Height of the MJPEG stream requested from the device (e.g. 480)",
+          "mjpeg_fps": "Frames per second for the MJPEG stream (1-15)"
+        }
+      },
       "relay": {
         "title": "2N Intercom Options - Relay {relay_number}",
         "description": "Update relay {relay_number}",
@@ -142,6 +158,14 @@
       "options": {
         "door": "Door",
         "gate": "Gate"
+      }
+    },
+    "live_view_mode": {
+      "options": {
+        "auto": "Auto (RTSP > MJPEG > snapshots)",
+        "rtsp": "RTSP only",
+        "mjpeg": "MJPEG only",
+        "jpeg_only": "JPEG snapshots only"
       }
     },
     "protocol": {

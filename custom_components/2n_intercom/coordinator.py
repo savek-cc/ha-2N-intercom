@@ -20,7 +20,16 @@ from .api import (
     TwoNConnectionError,
     TwoNIntercomAPI,
 )
-from .const import CALLED_ID_ALL, DEFAULT_LIVE_VIEW_MODE, DEFAULT_SCAN_INTERVAL, DOMAIN
+from .const import (
+    CALLED_ID_ALL,
+    CONF_LIVE_VIEW_MODE,
+    CONF_MJPEG_FPS,
+    CONF_MJPEG_HEIGHT,
+    CONF_MJPEG_WIDTH,
+    DEFAULT_LIVE_VIEW_MODE,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+)
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -483,7 +492,7 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
             if callable(fetcher):
                 try:
                     self._camera_transport_info = await fetcher(
-                        requested_mode=DEFAULT_LIVE_VIEW_MODE,
+                        **self._camera_transport_overrides()
                     )
                 except Exception as err:  # pylint: disable=broad-except
                     _LOGGER.debug("Failed to resolve camera transport info: %s", err)
@@ -495,6 +504,40 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
                     "API does not expose async_get_camera_transport_info; "
                     "skipping static transport cache"
                 )
+
+    def _camera_transport_overrides(self) -> dict[str, Any]:
+        """Return kwargs for ``async_get_camera_transport_info`` from options.
+
+        Reads the user-configurable camera fields from the config entry's
+        ``options`` (set via the integration's options flow) and falls back
+        to the module defaults when a field hasn't been configured. Unknown
+        keys are dropped so older API versions remain compatible.
+        """
+        overrides: dict[str, Any] = {
+            "requested_mode": DEFAULT_LIVE_VIEW_MODE,
+        }
+        entry = self.config_entry
+        if entry is None:
+            return overrides
+
+        options = dict(entry.options or {})
+        live_view_mode = options.get(CONF_LIVE_VIEW_MODE)
+        if isinstance(live_view_mode, str) and live_view_mode:
+            overrides["requested_mode"] = live_view_mode
+
+        mjpeg_width = options.get(CONF_MJPEG_WIDTH)
+        if isinstance(mjpeg_width, int) and mjpeg_width > 0:
+            overrides["mjpeg_width"] = mjpeg_width
+
+        mjpeg_height = options.get(CONF_MJPEG_HEIGHT)
+        if isinstance(mjpeg_height, int) and mjpeg_height > 0:
+            overrides["mjpeg_height"] = mjpeg_height
+
+        mjpeg_fps = options.get(CONF_MJPEG_FPS)
+        if isinstance(mjpeg_fps, int) and mjpeg_fps > 0:
+            overrides["mjpeg_fps"] = mjpeg_fps
+
+        return overrides
 
     async def _async_update_data(self) -> TwoNIntercomData:
         """Fetch data from API."""

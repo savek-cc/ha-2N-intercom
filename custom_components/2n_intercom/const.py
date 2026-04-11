@@ -13,6 +13,13 @@ CONF_DOOR_TYPE = "door_type"
 CONF_CALLED_ID = "called_id"
 CALLED_ID_ALL = "__all__"
 
+# Camera configuration keys
+CONF_LIVE_VIEW_MODE = "live_view_mode"
+CONF_MJPEG_WIDTH = "mjpeg_width"
+CONF_MJPEG_HEIGHT = "mjpeg_height"
+CONF_MJPEG_FPS = "mjpeg_fps"
+CONF_CAMERA_SOURCE = "camera_source"
+
 # Relay configuration keys
 CONF_RELAY_NAME = "relay_name"
 CONF_RELAY_NUMBER = "relay_number"

@@ -19,10 +19,16 @@ import homeassistant.helpers.config_validation as cv
 from .api import TwoNIntercomAPI
 from .const import (
     CALLED_ID_ALL,
+    CAMERA_MJPEG_FPS_MAX,
+    CAMERA_MJPEG_FPS_MIN,
     CONF_CALLED_ID,
     CONF_DOOR_TYPE,
     CONF_ENABLE_CAMERA,
     CONF_ENABLE_DOORBELL,
+    CONF_LIVE_VIEW_MODE,
+    CONF_MJPEG_FPS,
+    CONF_MJPEG_HEIGHT,
+    CONF_MJPEG_WIDTH,
     CONF_PROTOCOL,
     CONF_RELAY_COUNT,
     CONF_RELAY_DEVICE_TYPE,
@@ -31,8 +37,12 @@ from .const import (
     CONF_RELAY_PULSE_DURATION,
     CONF_RELAYS,
     CONF_VERIFY_SSL,
+    DEFAULT_CAMERA_MJPEG_FPS,
+    DEFAULT_CAMERA_MJPEG_HEIGHT,
+    DEFAULT_CAMERA_MJPEG_WIDTH,
     DEFAULT_ENABLE_CAMERA,
     DEFAULT_ENABLE_DOORBELL,
+    DEFAULT_LIVE_VIEW_MODE,
     DEFAULT_PORT_HTTP,
     DEFAULT_PORT_HTTPS,
     DEFAULT_PROTOCOL,
@@ -45,6 +55,7 @@ from .const import (
     DOOR_TYPE_DOOR,
     DOOR_TYPE_GATE,
     DOOR_TYPES,
+    LIVE_VIEW_MODES,
     PROTOCOL_HTTP,
     PROTOCOL_HTTPS,
     PROTOCOLS,
@@ -710,13 +721,14 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             self._data.update(user_input)
 
-            relay_count = user_input.get(CONF_RELAY_COUNT, DEFAULT_RELAY_COUNT)
-            if relay_count > 0:
-                self._relays = []
-                return await self.async_step_relay(relay_index=0)
+            # If the camera is enabled, surface the camera transport options
+            # step so the user can tune live-view mode and MJPEG resolution.
+            # Disabling the camera skips it entirely — the defaults stay as a
+            # no-op until the user re-enables.
+            if user_input.get(CONF_ENABLE_CAMERA, DEFAULT_ENABLE_CAMERA):
+                return await self.async_step_camera()
 
-            self._data[CONF_RELAYS] = []
-            return await self._async_create_entry()
+            return await self._async_after_camera_step()
 
         data_schema = vol.Schema(
             {
@@ -754,6 +766,108 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
             data_schema=data_schema,
             errors=errors,
         )
+
+    async def async_step_camera(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle camera transport options.
+
+        Lets the user override how the integration talks to the 2N camera —
+        live-view mode (auto/rtsp/mjpeg/jpeg-only) and MJPEG stream
+        resolution/fps. The defaults match the device's high-res preset, so
+        leaving every field untouched preserves the previous behavior. The
+        coordinator picks the new values up via ``async_update_options`` →
+        ``async_reload``, no manual restart required.
+        """
+        errors: dict[str, str] = {}
+        current_data = self._merged_data()
+
+        if user_input is not None:
+            # Coerce NumberSelector outputs (which arrive as float) to ints
+            # so the coordinator's ``isinstance(..., int)`` checks pass and
+            # the values round-trip cleanly through entry.options storage.
+            for int_key in (CONF_MJPEG_WIDTH, CONF_MJPEG_HEIGHT, CONF_MJPEG_FPS):
+                if int_key in user_input and user_input[int_key] is not None:
+                    user_input[int_key] = int(user_input[int_key])
+            self._data.update(user_input)
+            return await self._async_after_camera_step()
+
+        live_view_field = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    {"label": mode, "value": mode} for mode in LIVE_VIEW_MODES
+                ],
+                mode=selector.SelectSelectorMode.DROPDOWN,
+                translation_key=CONF_LIVE_VIEW_MODE,
+            )
+        )
+
+        # NumberSelector with a sensible upper bound — 2N caps MJPEG output
+        # at the device's max sensor resolution; we don't enforce that here
+        # because capabilities are device-specific. The API still validates
+        # against ``CameraCapabilities`` and falls back to the closest match.
+        resolution_field = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=160,
+                max=2592,
+                step=1,
+                mode=selector.NumberSelectorMode.BOX,
+            )
+        )
+
+        fps_field = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=CAMERA_MJPEG_FPS_MIN,
+                max=CAMERA_MJPEG_FPS_MAX,
+                step=1,
+                mode=selector.NumberSelectorMode.BOX,
+            )
+        )
+
+        data_schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_LIVE_VIEW_MODE,
+                    default=current_data.get(
+                        CONF_LIVE_VIEW_MODE, DEFAULT_LIVE_VIEW_MODE
+                    ),
+                ): live_view_field,
+                vol.Required(
+                    CONF_MJPEG_WIDTH,
+                    default=current_data.get(
+                        CONF_MJPEG_WIDTH, DEFAULT_CAMERA_MJPEG_WIDTH
+                    ),
+                ): resolution_field,
+                vol.Required(
+                    CONF_MJPEG_HEIGHT,
+                    default=current_data.get(
+                        CONF_MJPEG_HEIGHT, DEFAULT_CAMERA_MJPEG_HEIGHT
+                    ),
+                ): resolution_field,
+                vol.Required(
+                    CONF_MJPEG_FPS,
+                    default=current_data.get(
+                        CONF_MJPEG_FPS, DEFAULT_CAMERA_MJPEG_FPS
+                    ),
+                ): fps_field,
+            }
+        )
+
+        return self.async_show_form(
+            step_id="camera",
+            data_schema=data_schema,
+            errors=errors,
+        )
+
+    async def _async_after_camera_step(self) -> FlowResult:
+        """Continue the options flow after the (optional) camera step."""
+        relay_count = self._data.get(CONF_RELAY_COUNT, DEFAULT_RELAY_COUNT)
+        if relay_count > 0:
+            self._relays = []
+            return await self.async_step_relay(relay_index=0)
+
+        self._data[CONF_RELAYS] = []
+        return await self._async_create_entry()
 
     async def async_step_relay(
         self, user_input: dict[str, Any] | None = None, relay_index: int = 0

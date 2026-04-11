@@ -99,6 +99,22 @@
           "called_id": "Vyberte účet, na který se zvoní. Všechny hovory = zvonění pro všechna tlačítka."
         }
       },
+      "camera": {
+        "title": "Možnosti 2N Intercom - Kamera",
+        "description": "Vyladění video streamu z 2N kamery v Home Assistantu. Snížením rozlišení a snímkové frekvence MJPEG výrazně ušetříte přenos dat na nástěnkách, kde je kamera trvale viditelná.",
+        "data": {
+          "live_view_mode": "Režim živého náhledu",
+          "mjpeg_width": "Šířka MJPEG (pixely)",
+          "mjpeg_height": "Výška MJPEG (pixely)",
+          "mjpeg_fps": "Snímky za sekundu (MJPEG)"
+        },
+        "data_description": {
+          "live_view_mode": "auto upřednostní RTSP, pak MJPEG, případně jen JPEG snímky",
+          "mjpeg_width": "Šířka MJPEG streamu vyžádaného od zařízení (např. 640)",
+          "mjpeg_height": "Výška MJPEG streamu vyžádaného od zařízení (např. 480)",
+          "mjpeg_fps": "Snímky za sekundu pro MJPEG stream (1-15)"
+        }
+      },
       "relay": {
         "title": "Možnosti 2N Intercom - Relé {relay_number}",
         "description": "Upravte relé {relay_number}",
@@ -116,6 +132,14 @@
       "options": {
         "door": "Dveře",
         "gate": "Vrata"
+      }
+    },
+    "live_view_mode": {
+      "options": {
+        "auto": "Auto (RTSP > MJPEG > snímky)",
+        "rtsp": "Pouze RTSP",
+        "mjpeg": "Pouze MJPEG",
+        "jpeg_only": "Pouze JPEG snímky"
       }
     },
     "protocol": {
