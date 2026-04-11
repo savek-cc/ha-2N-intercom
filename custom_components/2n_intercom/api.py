@@ -1183,14 +1183,12 @@ class TwoNIntercomAPI:
                     if "image" not in content_type:
                         error_body = await response.text()
                         request_url = str(response.url)
-                        _LOGGER.error(
-                            "Snapshot returned non-image content-type: %s body=%s request_url=%s params=%s",
-                            content_type,
-                            error_body,
-                            request_url,
-                            params,
-                        )
 
+                        # 2N firmware refuses any width/height that is not in
+                        # /api/camera/caps jpegResolution. HA's entity-registry
+                        # preview probes the camera at 80x80, which always falls
+                        # outside that list. We retry once at the always-supported
+                        # 640x480 size; only escalate to ERROR if that also fails.
                         error_code = None
                         try:
                             payload = json.loads(error_body)
@@ -1199,13 +1197,20 @@ class TwoNIntercomAPI:
                             error_code = None
 
                         if error_code == 12 and (width, height) != (640, 480):
-                            _LOGGER.warning(
-                                "Retrying snapshot with fallback resolution 640x480 request_url=%s params=%s",
-                                request_url,
-                                params,
+                            _LOGGER.debug(
+                                "Snapshot at %dx%d rejected (code 12); retrying at 640x480",
+                                width,
+                                height,
                             )
                             return await self.async_get_snapshot(width=640, height=480)
 
+                        _LOGGER.error(
+                            "Snapshot returned non-image content-type: %s body=%s request_url=%s params=%s",
+                            content_type,
+                            error_body,
+                            request_url,
+                            params,
+                        )
                         return None
                     return await response.read()
                     

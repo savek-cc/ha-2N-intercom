@@ -1,9 +1,6 @@
 answer_call:
   name: Answer call
   description: Answer the active 2N Intercom call session or a specific session.
-  target:
-    config_entry:
-      integration: 2n_intercom
   fields:
     config_entry_id:
       name: Config entry ID
@@ -21,9 +18,6 @@ answer_call:
 hangup_call:
   name: Hang up call
   description: Hang up the active 2N Intercom call session or a specific session.
-  target:
-    config_entry:
-      integration: 2n_intercom
   fields:
     config_entry_id:
       name: Config entry ID
