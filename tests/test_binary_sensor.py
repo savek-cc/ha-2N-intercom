@@ -2,39 +2,21 @@
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 import types
 import unittest
-from pathlib import Path
 
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-CONST_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "const.py"
-ENTITY_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "entity.py"
-BINARY_SENSOR_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "binary_sensor.py"
-
-
-def _ensure_package(name: str) -> types.ModuleType:
-    module = sys.modules.get(name)
-    if module is None:
-        module = types.ModuleType(name)
-        module.__path__ = []  # type: ignore[attr-defined]
-        sys.modules[name] = module
-    return module
-
-
-def _load_module(module_name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
+from _stubs import (
+    BINARY_SENSOR_PATH,
+    CONST_PATH,
+    ENTITY_PATH,
+    ensure_package,
+    load_module,
+)
 
 
 def _install_homeassistant_stubs() -> None:
-    _ensure_package("homeassistant")
+    ensure_package("homeassistant")
 
     binary_sensor_module = types.ModuleType("homeassistant.components.binary_sensor")
 
@@ -48,7 +30,7 @@ def _install_homeassistant_stubs() -> None:
     binary_sensor_module.BinarySensorDeviceClass = BinarySensorDeviceClass
     binary_sensor_module.BinarySensorEntity = BinarySensorEntity
     sys.modules["homeassistant.components.binary_sensor"] = binary_sensor_module
-    _ensure_package("homeassistant.components")
+    ensure_package("homeassistant.components")
 
     config_entries = types.ModuleType("homeassistant.config_entries")
     config_entries.ConfigEntry = object
@@ -82,19 +64,19 @@ def _install_homeassistant_stubs() -> None:
 
     update_coordinator.CoordinatorEntity = CoordinatorEntity
     sys.modules["homeassistant.helpers.update_coordinator"] = update_coordinator
-    _ensure_package("homeassistant.helpers")
+    ensure_package("homeassistant.helpers")
 
 
 def load_binary_sensor_module():
     _install_homeassistant_stubs()
-    _ensure_package("custom_components")
-    _ensure_package("custom_components.2n_intercom")
-    _load_module("custom_components.2n_intercom.const", CONST_PATH)
+    ensure_package("custom_components")
+    ensure_package("custom_components.2n_intercom")
+    load_module("custom_components.2n_intercom.const", CONST_PATH)
     coordinator_module = types.ModuleType("custom_components.2n_intercom.coordinator")
     coordinator_module.TwoNIntercomCoordinator = object
     sys.modules["custom_components.2n_intercom.coordinator"] = coordinator_module
-    _load_module("custom_components.2n_intercom.entity", ENTITY_PATH)
-    return _load_module("custom_components.2n_intercom.binary_sensor", BINARY_SENSOR_PATH)
+    load_module("custom_components.2n_intercom.entity", ENTITY_PATH)
+    return load_module("custom_components.2n_intercom.binary_sensor", BINARY_SENSOR_PATH)
 
 
 class FakeConfigEntry:

@@ -3,83 +3,22 @@
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import sys
 import types
 import unittest
-from pathlib import Path
 
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-API_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "api.py"
-CONST_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "const.py"
-COORDINATOR_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "coordinator.py"
-
-
-def _ensure_package(name: str) -> types.ModuleType:
-    module = sys.modules.get(name)
-    if module is None:
-        module = types.ModuleType(name)
-        module.__path__ = []  # type: ignore[attr-defined]
-        sys.modules[name] = module
-    return module
-
-
-def _install_api_stubs() -> None:
-    aiohttp = types.ModuleType("aiohttp")
-
-    class BasicAuth:
-        def __init__(self, login: str, password: str) -> None:
-            self.login = login
-            self.password = password
-
-    class TCPConnector:
-        def __init__(self, ssl: bool) -> None:
-            self.ssl = ssl
-
-    class ClientSession:
-        def __init__(self, *args, **kwargs) -> None:
-            self.closed = False
-
-        async def close(self) -> None:
-            self.closed = True
-
-    class ClientResponse:
-        status = 200
-        headers: dict[str, str] = {}
-
-    class ClientError(Exception):
-        """Stub aiohttp client error."""
-
-    def digest_auth_middleware(*args, **kwargs):
-        return object()
-
-    aiohttp.BasicAuth = BasicAuth
-    aiohttp.TCPConnector = TCPConnector
-    aiohttp.ClientSession = ClientSession
-    aiohttp.ClientResponse = ClientResponse
-    aiohttp.ClientError = ClientError
-    aiohttp.DigestAuthMiddleware = digest_auth_middleware
-    sys.modules["aiohttp"] = aiohttp
-
-    async_timeout = types.ModuleType("async_timeout")
-
-    class _Timeout:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-    def timeout(*args, **kwargs):
-        return _Timeout()
-
-    async_timeout.timeout = timeout
-    sys.modules["async_timeout"] = async_timeout
+from _stubs import (
+    API_PATH,
+    CONST_PATH,
+    COORDINATOR_PATH,
+    ensure_package,
+    install_api_stubs,
+    load_module,
+)
 
 
 def _install_homeassistant_stubs() -> None:
-    _ensure_package("homeassistant")
+    ensure_package("homeassistant")
 
     core = types.ModuleType("homeassistant.core")
     core.HomeAssistant = object
@@ -111,26 +50,17 @@ def _install_homeassistant_stubs() -> None:
     update_coordinator.DataUpdateCoordinator = DataUpdateCoordinator
     update_coordinator.UpdateFailed = UpdateFailed
     sys.modules["homeassistant.helpers.update_coordinator"] = update_coordinator
-    _ensure_package("homeassistant.helpers")
-
-
-def _load_module(module_name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
+    ensure_package("homeassistant.helpers")
 
 
 def load_coordinator_module():
-    _install_api_stubs()
+    install_api_stubs()
     _install_homeassistant_stubs()
-    _ensure_package("custom_components")
-    _ensure_package("custom_components.2n_intercom")
-    _load_module("custom_components.2n_intercom.const", CONST_PATH)
-    _load_module("custom_components.2n_intercom.api", API_PATH)
-    return _load_module("custom_components.2n_intercom.coordinator", COORDINATOR_PATH)
+    ensure_package("custom_components")
+    ensure_package("custom_components.2n_intercom")
+    load_module("custom_components.2n_intercom.const", CONST_PATH)
+    load_module("custom_components.2n_intercom.api", API_PATH)
+    return load_module("custom_components.2n_intercom.coordinator", COORDINATOR_PATH)
 
 
 class TwoNIntercomCoordinatorTests(unittest.IsolatedAsyncioTestCase):
