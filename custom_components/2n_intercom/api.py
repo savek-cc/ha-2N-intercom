@@ -669,12 +669,28 @@ class TwoNIntercomAPI:
         path: str,
         *,
         params: dict[str, Any],
+        method: str = "GET",
     ) -> bool:
-        """Send a call-control action request and return success state."""
+        """Send a call-control action request and return success state.
+
+        Device error code 14 is **overloaded** by the 2N firmware: it is
+        used both for ``"session not found"`` (the session is already gone,
+        which is the desired post-condition for a hangup) AND for
+        ``"Unsupported Content-Type"`` (the request was rejected outright,
+        the call is still ringing). We can only treat the former as
+        success — the latter must surface as a failure or we silently
+        mask exactly the bug we shipped this fix for.
+
+        Defaults to GET because the 2N IP Verso firmware (2.50.0.76.2)
+        rejects aiohttp's default POST with ``code 14, "Unsupported
+        Content-Type"`` while a plain GET — the variant the HTTP API
+        manual uses in its own example for ``/api/call/hangup`` — works
+        in every test cell of the timing/variant matrix.
+        """
         try:
             async with async_timeout.timeout(API_TIMEOUT):
                 async with self._async_request(
-                    "POST",
+                    method,
                     path,
                     params=params,
                 ) as response:
@@ -687,7 +703,31 @@ class TwoNIntercomAPI:
                     data = await response.json()
 
             if isinstance(data, dict):
-                return bool(data.get("success", False))
+                if data.get("success", False):
+                    return True
+                error = data.get("error") if isinstance(data.get("error"), dict) else {}
+                code = error.get("code")
+                description = error.get("description") or error.get("param") or ""
+                # Code 14 is overloaded — only the "not found" flavour is
+                # safe to treat as success (post-condition already true).
+                # "Unsupported Content-Type" and any other future flavour
+                # must propagate as a real failure.
+                if code == 14 and "not found" in str(description).strip().lower():
+                    _LOGGER.debug(
+                        "Call action %s with %s reported session-not-found "
+                        "(code 14, %r); treating as success",
+                        path,
+                        params,
+                        description,
+                    )
+                    return True
+                _LOGGER.error(
+                    "Call action %s with %s failed: code=%s description=%r",
+                    path,
+                    params,
+                    code,
+                    description,
+                )
             return False
 
         except TwoNAuthenticationError:
@@ -709,11 +749,36 @@ class TwoNIntercomAPI:
             params={"session": session_id},
         )
 
-    async def async_hangup_call(self, session_id: str, reason: str = "normal") -> bool:
-        """Hang up an active call session."""
+    async def async_hangup_call(
+        self, session_id: str, reason: str | None = None
+    ) -> bool:
+        """Hang up an active call session.
+
+        Uses ``GET /api/call/hangup?session=…``, matching the example in
+        section 5.7.4 of the 2N HTTP API manual (firmware 2.50). A direct
+        side-by-side timing/variant matrix against firmware 2.50.0.76.2
+        established that:
+
+        * ``GET`` with or without ``reason=…`` terminates the session in
+          every state (connecting, ringing, and even after a 5 s wait).
+        * ``POST`` with ``Content-Type: application/x-www-form-urlencoded``
+          or ``application/json`` also terminates correctly.
+        * ``aiohttp.ClientSession.post(...)`` without an explicit body —
+          which is what the integration was sending before this fix —
+          produces a request the firmware rejects with ``code: 14,
+          description: "Unsupported Content-Type"``. The call keeps
+          ringing.
+
+        ``reason`` is accepted for caller compatibility but is **not**
+        forwarded by default; pass it only if you have verified the
+        device honours it for the call state in question.
+        """
+        params: dict[str, Any] = {"session": session_id}
+        if reason:
+            params["reason"] = reason
         return await self._async_call_action(
             "/api/call/hangup",
-            params={"session": session_id, "reason": reason},
+            params=params,
         )
 
     async def async_subscribe_log(self, events: list[str] | tuple[str, ...]) -> int | None:

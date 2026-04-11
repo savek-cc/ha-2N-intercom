@@ -347,7 +347,7 @@ class CallControlApiTests(unittest.IsolatedAsyncioTestCase):
             api.requests,
             [
                 {
-                    "method": "POST",
+                    "method": "GET",
                     "path": "/api/call/answer",
                     "params": {"session": "session-123"},
                     "json_data": None,
@@ -363,7 +363,30 @@ class CallControlApiTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result)
 
-    async def test_hangup_call_sends_session_id_and_reason(self) -> None:
+    async def test_hangup_call_sends_only_session_id_by_default(self) -> None:
+        """The default hangup must be a GET with only ``session=`` because
+        firmware 2.50.0.76.2 silently no-ops POSTs and ignores the ``reason``
+        param for outgoing-ringing sessions while still answering ``success``.
+        """
+        api = self._make_api()
+
+        result = await api.async_hangup_call("session-456")
+
+        self.assertTrue(result)
+        self.assertEqual(
+            api.requests,
+            [
+                {
+                    "method": "GET",
+                    "path": "/api/call/hangup",
+                    "params": {"session": "session-456"},
+                    "json_data": None,
+                    "headers": None,
+                }
+            ],
+        )
+
+    async def test_hangup_call_forwards_explicit_reason_when_provided(self) -> None:
         api = self._make_api()
 
         result = await api.async_hangup_call("session-456", reason="busy")
@@ -373,7 +396,7 @@ class CallControlApiTests(unittest.IsolatedAsyncioTestCase):
             api.requests,
             [
                 {
-                    "method": "POST",
+                    "method": "GET",
                     "path": "/api/call/hangup",
                     "params": {"session": "session-456", "reason": "busy"},
                     "json_data": None,
@@ -386,6 +409,40 @@ class CallControlApiTests(unittest.IsolatedAsyncioTestCase):
         api = self._make_api({"success": False})
 
         result = await api.async_hangup_call("session-456", reason="busy")
+
+        self.assertFalse(result)
+
+    async def test_hangup_call_treats_session_not_found_as_success(self) -> None:
+        """Code 14 + ``session not found`` is the firmware's way of saying
+        the desired post-condition (no such call) is already true. We treat
+        that as success so the integration is idempotent across races
+        between push (log subscription) and pull (status polling)."""
+        api = self._make_api(
+            {
+                "success": False,
+                "error": {"code": 14, "description": "session not found"},
+            }
+        )
+
+        result = await api.async_hangup_call("session-stale")
+
+        self.assertTrue(result)
+
+    async def test_hangup_call_treats_unsupported_content_type_as_failure(self) -> None:
+        """Code 14 is **overloaded** by the 2N firmware. The variant we
+        must NEVER treat as success is ``"Unsupported Content-Type"`` —
+        that means the request was rejected outright and the call is still
+        ringing. A previous version of this code returned True for *any*
+        code-14 response, which silently masked the aiohttp default-POST
+        bug for months."""
+        api = self._make_api(
+            {
+                "success": False,
+                "error": {"code": 14, "description": "Unsupported Content-Type"},
+            }
+        )
+
+        result = await api.async_hangup_call("session-live")
 
         self.assertFalse(result)
 

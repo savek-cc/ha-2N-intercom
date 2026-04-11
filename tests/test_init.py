@@ -279,7 +279,13 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         ):
             await hangup_call(types.SimpleNamespace(data={}))
 
-    async def test_hangup_reason_defaults_to_normal_for_none(self) -> None:
+    async def test_hangup_reason_defaults_to_none_when_unset(self) -> None:
+        """When the caller does not pass a valid reason the service must
+        forward ``None`` to the API layer, NOT default to ``"normal"``.
+        Firmware 2.50.0.76.2 ignores ``reason=normal`` for outgoing-ringing
+        sessions while still answering ``success: true``, so the only
+        reliable contract is to omit the parameter entirely.
+        """
         init_module = self.init_module
         const_module = self.const_module
         ha_const = sys.modules["homeassistant.const"]
@@ -302,7 +308,32 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         await hangup_call(types.SimpleNamespace(data={"reason": None}))
 
         stored = hass.data[const_module.DOMAIN][entry.entry_id]
-        self.assertEqual(stored["api"].hangup_calls, [("session-123", "normal")])
+        self.assertEqual(stored["api"].hangup_calls, [("session-123", None)])
+
+    async def test_hangup_reason_forwarded_when_explicitly_valid(self) -> None:
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+
+        await init_module.async_setup_entry(hass, entry)
+
+        hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
+        await hangup_call(types.SimpleNamespace(data={"reason": "rejected"}))
+
+        stored = hass.data[const_module.DOMAIN][entry.entry_id]
+        self.assertEqual(stored["api"].hangup_calls, [("session-123", "rejected")])
 
     async def test_service_rejects_ambiguous_target_without_config_entry_id(self) -> None:
         init_module = self.init_module

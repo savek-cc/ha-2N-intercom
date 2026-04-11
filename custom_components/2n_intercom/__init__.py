@@ -113,6 +113,26 @@ def _resolve_session_id(
     raise HomeAssistantError("No active call session is available to target.")
 
 
+def _extract_session_ids_from_status(status: Any) -> list[str]:
+    """Pull session ids out of /api/call/status `result` payload."""
+    if not isinstance(status, dict):
+        return []
+    sessions = status.get("sessions")
+    if not isinstance(sessions, list):
+        return []
+    out: list[str] = []
+    for session in sessions:
+        if not isinstance(session, dict):
+            continue
+        raw = session.get("session")
+        if raw is None:
+            continue
+        text = str(raw).strip()
+        if text:
+            out.append(text)
+    return out
+
+
 def _register_call_services(hass: HomeAssistant) -> None:
     """Register call-control services once per Home Assistant instance."""
     domain_data = hass.data.setdefault(DOMAIN, {})
@@ -128,23 +148,102 @@ def _register_call_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(f"Failed to answer call session {session_id}.")
 
     async def _async_hangup_call(call: Any) -> None:
+        """Hang up active 2N call sessions.
+
+        Idempotent: if no session id is supplied and no session can be
+        discovered live on the device, the call is treated as a successful
+        no-op (the desired post-condition — no active call — already holds).
+        When the caller does not pin a specific session, every active session
+        on the device is hung up so a stale cached id can never strand a real
+        ringing call.
+
+        ``reason`` is only forwarded to the device when the caller passes an
+        explicit valid value. The default leaves it unset, because firmware
+        2.50.0.76.2 silently ignores hangups carrying a ``reason`` for
+        outgoing-ringing sessions while still answering ``success: true``.
+        """
         service_data = dict(getattr(call, "data", {}) or {})
         entry_data = _resolve_service_entry(hass, service_data)
-        session_id = _resolve_session_id(entry_data, service_data)
+        api = entry_data["api"]
+
         raw_reason = service_data.get("reason")
         if isinstance(raw_reason, str):
             normalized_reason = raw_reason.strip().lower()
         else:
             normalized_reason = ""
-        reason = (
-            normalized_reason
-            if normalized_reason in _VALID_HANGUP_REASONS
-            else "normal"
+        reason: str | None = (
+            normalized_reason if normalized_reason in _VALID_HANGUP_REASONS else None
         )
-        api = entry_data["api"]
-        if not await api.async_hangup_call(session_id, reason=reason):
+
+        explicit_session = service_data.get("session_id")
+        if explicit_session is not None and str(explicit_session).strip():
+            session_id = str(explicit_session).strip()
+            if not await api.async_hangup_call(session_id, reason=reason):
+                raise HomeAssistantError(
+                    f"Failed to hang up call session {session_id}"
+                    + (f" with reason {reason}." if reason else ".")
+                )
+            return
+
+        # No explicit session id — ask the device for the live truth instead
+        # of trusting whatever the coordinator last cached. This avoids two
+        # observed failure modes: (1) the cached active_session_id was already
+        # cleared by the polling loop, and (2) it points at a session the
+        # device has since terminated, in which case the device returns
+        # code 14 "session not found".
+        try:
+            status = await api.async_get_call_status()
+        except Exception as err:  # noqa: BLE001 — surface as service error
             raise HomeAssistantError(
-                f"Failed to hang up call session {session_id} with reason {reason}."
+                f"Could not query 2N call status before hangup: {err}"
+            ) from err
+
+        _LOGGER.debug(
+            "2n_intercom.hangup_call: live /api/call/status payload = %s",
+            status,
+        )
+
+        live_sessions = _extract_session_ids_from_status(status)
+        coordinator = entry_data["coordinator"]
+        cached = getattr(coordinator, "active_session_id", None)
+        _LOGGER.debug(
+            "2n_intercom.hangup_call: extracted live sessions=%s, coordinator cached=%s",
+            live_sessions,
+            cached,
+        )
+        if not live_sessions:
+            # Fall back to whatever the coordinator thought was active so a
+            # very-recently-ended call still gets a best-effort hangup;
+            # otherwise this is a genuine no-op and we succeed silently.
+            if cached is not None and str(cached).strip():
+                live_sessions = [str(cached).strip()]
+            else:
+                _LOGGER.debug(
+                    "2n_intercom.hangup_call: no active call sessions; nothing to do"
+                )
+                return
+
+        failures: list[str] = []
+        for session_id in live_sessions:
+            _LOGGER.debug(
+                "2n_intercom.hangup_call: dispatching hangup for session=%s reason=%s",
+                session_id,
+                reason,
+            )
+            ok = await api.async_hangup_call(session_id, reason=reason)
+            _LOGGER.debug(
+                "2n_intercom.hangup_call: hangup session=%s result=%s",
+                session_id,
+                ok,
+            )
+            if not ok:
+                failures.append(session_id)
+
+        if failures:
+            raise HomeAssistantError(
+                "Failed to hang up call session(s) "
+                f"{', '.join(failures)}"
+                + (f" with reason {reason}." if reason else ".")
             )
 
     hass.services.async_register(DOMAIN, "answer_call", _async_answer_call)
