@@ -304,6 +304,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     platforms = _get_platforms(entry)
     await hass.config_entries.async_forward_entry_setups(entry, platforms)
+    # Remember exactly which platforms were forwarded so unload tears down the
+    # same set even if the user later changes options that would shift
+    # _get_platforms() output (e.g. enabling relays flips lock <-> switch+cover).
+    hass.data[DOMAIN][entry.entry_id]["loaded_platforms"] = list(platforms)
 
     entry.async_on_unload(entry.add_update_listener(async_update_options))
     return True
@@ -316,7 +320,12 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    platforms = _get_platforms(entry)
+    # Use the platform list captured at setup so we tear down exactly what was
+    # forwarded; recomputing from the merged data here would lie if options
+    # changed (e.g. relay_count went from 0 to 1) and try to unload platforms
+    # that were never loaded.
+    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+    platforms = entry_data.get("loaded_platforms") or _get_platforms(entry)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
 
     if unload_ok:
