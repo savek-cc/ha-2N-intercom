@@ -45,6 +45,111 @@ _CAMERA_SOURCE_KEYS = {"source", "sources", "videosource", "camerasource"}
 _CAMERA_CAPS_KEYS = {"caps", "camera", "jpeg", "resolution", "resolutions"}
 
 
+# 2N error-code constants. The HTTP API manual (section "Error codes")
+# documents the master table. The values that matter to this integration:
+#
+#   8  – invalid authentication method (Basic on a Digest-only endpoint)
+#   11 – missing mandatory parameter (``param`` carries the field name)
+#   12 – invalid parameter value     (``param`` carries the field name)
+#   13 – parameter data too big      (``param`` carries the field name)
+#   14 – unspecified processing error — **catch-all**, disambiguate by
+#        ``description``. Known overloads observed on firmware 2.50.0.76.2:
+#          - "session not found"        (idempotent for hangup)
+#          - "Unsupported Content-Type" (request rejected, action failed)
+#
+# Treat the master table as documentation only — do NOT remap codes here.
+# The whole point of the helpers below is that the code itself is rarely
+# enough; the description string is the disambiguator.
+TWON_ERROR_CODE_UNSPECIFIED = 14
+
+
+@dataclass(frozen=True)
+class TwoNDeviceError:
+    """Structured representation of a 2N HTTP API ``error`` payload."""
+
+    code: int | None
+    description: str
+    param: str | None
+
+    @property
+    def description_lower(self) -> str:
+        """Return the description normalized for case-insensitive matching."""
+        return self.description.strip().lower()
+
+    def is_unspecified_session_not_found(self) -> bool:
+        """Return True for ``code 14 + "...not found..."`` payloads.
+
+        This is the only flavour of code 14 that the call-control helpers
+        treat as success: the post-condition (no such session) is already
+        true, so the hangup is idempotent. Every other code-14 flavour
+        — most notably ``"Unsupported Content-Type"`` — is a real failure
+        and must surface as a WARNING in the logs.
+        """
+        return (
+            self.code == TWON_ERROR_CODE_UNSPECIFIED
+            and "not found" in self.description_lower
+        )
+
+    def format(self) -> str:
+        """Return a single-line, log-friendly representation."""
+        parts = [f"code={self.code}"]
+        if self.description:
+            parts.append(f"description={self.description!r}")
+        if self.param:
+            parts.append(f"param={self.param!r}")
+        return " ".join(parts)
+
+
+def parse_device_error(payload: Any) -> TwoNDeviceError | None:
+    """Parse a 2N response payload into a :class:`TwoNDeviceError`.
+
+    The 2N firmware reports failures as
+    ``{"success": false, "error": {"code": int, "description": str,
+    "param"?: str}}``. Returns ``None`` for successful or unrecognized
+    payloads so call-sites can use ``is None`` to mean "nothing went
+    wrong as far as the device is concerned."
+    """
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("success", False):
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        # ``success: false`` without an ``error`` block is itself an
+        # anomaly worth flagging — preserve that distinction so callers
+        # can still log it instead of pretending nothing happened.
+        return TwoNDeviceError(code=None, description="", param=None)
+    code_raw = error.get("code")
+    code = code_raw if isinstance(code_raw, int) else None
+    description = str(error.get("description") or "").strip()
+    param_raw = error.get("param")
+    param = str(param_raw).strip() if param_raw not in (None, "") else None
+    return TwoNDeviceError(code=code, description=description, param=param)
+
+
+def log_device_error(
+    level: int,
+    action: str,
+    path: str,
+    params: dict[str, Any] | None,
+    error: TwoNDeviceError,
+) -> None:
+    """Emit a uniformly formatted log line for a device-side failure.
+
+    Centralizing the format means every call site renders the same
+    ``code=… description=… param=…`` shape, so grepping the HA log for
+    ``"2n_intercom"`` is enough to find every device-rejected request.
+    """
+    _LOGGER.log(
+        level,
+        "2N action %s rejected by device at %s params=%s: %s",
+        action,
+        path,
+        params,
+        error.format(),
+    )
+
+
 @dataclass(frozen=True)
 class CameraResolution:
     """Normalized camera resolution."""
@@ -551,20 +656,31 @@ class TwoNIntercomAPI:
                     response.raise_for_status()
                     data = await response.json()
                     
-            # Parse directory data
-            # Expected format: {"success": true, "result": {...}} or list
-            if isinstance(data, dict) and data.get("success") is False:
-                return data
+            # Parse directory data.
+            # Expected format: {"success": true, "result": {...}} — but
+            # historical tolerance for {..., "users": [...]} is preserved.
+            if isinstance(data, dict):
+                if data.get("success") is False:
+                    error = parse_device_error(data)
+                    if error is not None:
+                        log_device_error(
+                            logging.WARNING,
+                            "directory query",
+                            "/api/dir/query",
+                            None,
+                            error,
+                        )
+                    return []
 
-            if isinstance(data, dict) and "result" in data:
-                result = data.get("result")
-                return result or []
+                if "result" in data:
+                    result = data.get("result")
+                    return result or []
 
-            if isinstance(data, dict) and "users" in data:
-                return data
+                if "users" in data:
+                    return data
 
             return []
-            
+
         except TwoNAuthenticationError:
             # Re-raise authentication errors
             raise
@@ -591,15 +707,25 @@ class TwoNIntercomAPI:
                         raise TwoNAuthenticationError(
                             "Authentication failed - invalid credentials"
                         )
-                    
+
                     response.raise_for_status()
                     data = await response.json()
-                    
+
             # Expected format: {"success": true, "result": {...}}
             if isinstance(data, dict):
-                return data.get("result", {})
+                if data.get("success", False):
+                    return data.get("result", {})
+                error = parse_device_error(data)
+                if error is not None:
+                    log_device_error(
+                        logging.WARNING,
+                        "call status",
+                        "/api/call/status",
+                        None,
+                        error,
+                    )
             return {}
-            
+
         except TwoNAuthenticationError:
             # Re-raise authentication errors
             raise
@@ -614,7 +740,16 @@ class TwoNIntercomAPI:
             raise TwoNAPIError(f"API error: {err}") from err
 
     async def _async_get_result_dict(self, path: str, label: str) -> dict[str, Any]:
-        """Fetch a JSON result object from a GET endpoint."""
+        """Fetch a JSON result object from a GET endpoint.
+
+        Returns ``{}`` on any device-side or transport failure so the
+        coordinator can keep its previous cache instead of crashing,
+        but always logs a WARNING with the parsed device error so a
+        future "no relays" or "no SIP accounts" surprise is traceable
+        back to the actual rejection (e.g. ``code 8 invalid
+        authentication method``) instead of looking like an empty
+        device.
+        """
         try:
             async with async_timeout.timeout(API_TIMEOUT):
                 async with self._async_request("GET", path) as response:
@@ -627,9 +762,14 @@ class TwoNIntercomAPI:
                     data = await response.json()
 
             if isinstance(data, dict):
-                result = data.get("result", {})
-                if isinstance(result, dict):
-                    return result
+                if data.get("success", False):
+                    result = data.get("result", {})
+                    if isinstance(result, dict):
+                        return result
+                    return {}
+                error = parse_device_error(data)
+                if error is not None:
+                    log_device_error(logging.WARNING, label, path, None, error)
             return {}
 
         except TwoNAuthenticationError:
@@ -702,44 +842,47 @@ class TwoNIntercomAPI:
                     response.raise_for_status()
                     data = await response.json()
 
-            if isinstance(data, dict):
-                if data.get("success", False):
-                    return True
-                error = data.get("error") if isinstance(data.get("error"), dict) else {}
-                code = error.get("code")
-                description = error.get("description") or error.get("param") or ""
-                # Code 14 is overloaded — only the "not found" flavour is
-                # safe to treat as success (post-condition already true).
-                # "Unsupported Content-Type" and any other future flavour
-                # must propagate as a real failure.
-                if code == 14 and "not found" in str(description).strip().lower():
-                    _LOGGER.debug(
-                        "Call action %s with %s reported session-not-found "
-                        "(code 14, %r); treating as success",
-                        path,
-                        params,
-                        description,
-                    )
-                    return True
-                _LOGGER.error(
-                    "Call action %s with %s failed: code=%s description=%r",
+            if isinstance(data, dict) and data.get("success", False):
+                return True
+
+            error = parse_device_error(data)
+            if error is None:
+                # Non-dict body or some other shape we don't recognize.
+                _LOGGER.warning(
+                    "2N action %s at %s params=%s returned unparseable "
+                    "payload: %r",
+                    path,
                     path,
                     params,
-                    code,
-                    description,
+                    data,
                 )
+                return False
+
+            if error.is_unspecified_session_not_found():
+                _LOGGER.debug(
+                    "2N action %s at %s params=%s reports the session "
+                    "is already gone (%s); treating the hangup as a "
+                    "successful no-op.",
+                    path,
+                    path,
+                    params,
+                    error.format(),
+                )
+                return True
+
+            log_device_error(logging.WARNING, path, path, params, error)
             return False
 
         except TwoNAuthenticationError:
             raise
         except asyncio.TimeoutError as err:
-            _LOGGER.error("Timeout calling %s: %s", path, err)
+            _LOGGER.warning("2N action %s timed out: %s", path, err)
             return False
         except aiohttp.ClientError as err:
-            _LOGGER.error("Error calling %s: %s", path, err)
+            _LOGGER.warning("2N action %s transport error: %s", path, err)
             return False
         except Exception as err:
-            _LOGGER.error("Unexpected error calling %s: %s", path, err)
+            _LOGGER.error("2N action %s unexpected error: %s", path, err)
             return False
 
     async def async_answer_call(self, session_id: str) -> bool:
@@ -806,7 +949,24 @@ class TwoNIntercomAPI:
                     response.raise_for_status()
                     data = await response.json()
 
-            if not isinstance(data, dict) or not data.get("success", False):
+            if not isinstance(data, dict):
+                _LOGGER.warning(
+                    "2N action log subscribe at /api/log/subscribe "
+                    "returned non-dict payload: %r",
+                    data,
+                )
+                return None
+
+            if not data.get("success", False):
+                error = parse_device_error(data)
+                if error is not None:
+                    log_device_error(
+                        logging.WARNING,
+                        "log subscribe",
+                        "/api/log/subscribe",
+                        {"filter": event_filter},
+                        error,
+                    )
                 return None
 
             result = data.get("result", {})
@@ -823,13 +983,13 @@ class TwoNIntercomAPI:
         except TwoNAuthenticationError:
             raise
         except asyncio.TimeoutError as err:
-            _LOGGER.error("Timeout subscribing to log events: %s", err)
+            _LOGGER.warning("2N log subscribe timed out: %s", err)
             return None
         except aiohttp.ClientError as err:
-            _LOGGER.error("Error subscribing to log events: %s", err)
+            _LOGGER.warning("2N log subscribe transport error: %s", err)
             return None
         except Exception as err:
-            _LOGGER.error("Unexpected error subscribing to log events: %s", err)
+            _LOGGER.error("2N log subscribe unexpected error: %s", err)
             return None
 
     async def async_pull_log(
@@ -858,7 +1018,30 @@ class TwoNIntercomAPI:
                     response.raise_for_status()
                     data = await response.json()
 
-            if not isinstance(data, dict) or not data.get("success", False):
+            if not isinstance(data, dict):
+                _LOGGER.debug(
+                    "2N log pull at /api/log/pull returned non-dict "
+                    "payload: %r",
+                    data,
+                )
+                return []
+
+            if not data.get("success", False):
+                error = parse_device_error(data)
+                if error is not None:
+                    # Pull failures are logged at DEBUG: the listener
+                    # loop has its own backoff + resubscribe path, and
+                    # this endpoint is hit roughly once per second so
+                    # WARNING-level noise here would drown the log on
+                    # any transient device hiccup. The listener loop
+                    # is the right place to escalate.
+                    log_device_error(
+                        logging.DEBUG,
+                        "log pull",
+                        "/api/log/pull",
+                        params,
+                        error,
+                    )
                 return []
 
             result = data.get("result", {})
@@ -873,13 +1056,13 @@ class TwoNIntercomAPI:
         except TwoNAuthenticationError:
             raise
         except asyncio.TimeoutError as err:
-            _LOGGER.error("Timeout pulling log events: %s", err)
+            _LOGGER.debug("2N log pull timed out: %s", err)
             return []
         except aiohttp.ClientError as err:
-            _LOGGER.error("Error pulling log events: %s", err)
+            _LOGGER.debug("2N log pull transport error: %s", err)
             return []
         except Exception as err:
-            _LOGGER.error("Unexpected error pulling log events: %s", err)
+            _LOGGER.error("2N log pull unexpected error: %s", err)
             return []
 
     async def async_unsubscribe_log(self, subscription_id: int) -> bool:
@@ -900,19 +1083,32 @@ class TwoNIntercomAPI:
                     data = await response.json()
 
             if isinstance(data, dict):
-                return bool(data.get("success", False))
+                if data.get("success", False):
+                    return True
+                error = parse_device_error(data)
+                if error is not None:
+                    # Unsubscribing is a teardown step and tolerates
+                    # "subscription not found" / stale-id rejections
+                    # cleanly, so DEBUG is sufficient here.
+                    log_device_error(
+                        logging.DEBUG,
+                        "log unsubscribe",
+                        "/api/log/unsubscribe",
+                        {"id": subscription_id},
+                        error,
+                    )
             return False
 
         except TwoNAuthenticationError:
             raise
         except asyncio.TimeoutError as err:
-            _LOGGER.error("Timeout unsubscribing from log events: %s", err)
+            _LOGGER.debug("2N log unsubscribe timed out: %s", err)
             return False
         except aiohttp.ClientError as err:
-            _LOGGER.error("Error unsubscribing from log events: %s", err)
+            _LOGGER.debug("2N log unsubscribe transport error: %s", err)
             return False
         except Exception as err:
-            _LOGGER.error("Unexpected error unsubscribing from log events: %s", err)
+            _LOGGER.error("2N log unsubscribe unexpected error: %s", err)
             return False
 
     async def async_get_system_info(self) -> dict[str, Any]:
@@ -932,7 +1128,17 @@ class TwoNIntercomAPI:
                     data = await response.json()
 
             if isinstance(data, dict):
-                return data.get("result", {})
+                if data.get("success", False):
+                    return data.get("result", {})
+                error = parse_device_error(data)
+                if error is not None:
+                    log_device_error(
+                        logging.WARNING,
+                        "system info",
+                        "/api/system/info",
+                        None,
+                        error,
+                    )
             return {}
 
         except TwoNAuthenticationError:
@@ -1181,24 +1387,29 @@ class TwoNIntercomAPI:
     ) -> bool:
         """
         Control relay via /api/switch/ctrl.
-        
+
         Args:
             relay: Relay number (1-4)
             action: Action to perform ("on", "off", "trigger")
             duration: Duration in milliseconds for trigger action
-            
+
         Returns:
             True if successful, False otherwise
+
+        Note:
+            This is a user-facing action (door opener / lock unlock), so
+            any device-side rejection is logged at WARNING with the full
+            ``code/description/param`` payload — the user pressed a
+            button and deserves to know why it didn't fire.
         """
+        params: dict[str, Any] = {
+            "switch": relay,
+            "action": action,
+        }
+        if duration > 0:
+            params["duration"] = duration
+
         try:
-            params = {
-                "switch": relay,
-                "action": action,
-            }
-            
-            if duration > 0:
-                params["duration"] = duration
-            
             async with async_timeout.timeout(API_TIMEOUT):
                 async with self._async_request(
                     "GET",
@@ -1207,20 +1418,35 @@ class TwoNIntercomAPI:
                 ) as response:
                     response.raise_for_status()
                     data = await response.json()
-                    
-            # Check if action was successful
-            if isinstance(data, dict):
-                return data.get("success", False)
+
+            if isinstance(data, dict) and data.get("success", False):
+                return True
+
+            error = parse_device_error(data)
+            if error is not None:
+                log_device_error(
+                    logging.WARNING,
+                    f"switch control relay={relay} action={action}",
+                    "/api/switch/ctrl",
+                    params,
+                    error,
+                )
             return False
-            
+
         except asyncio.TimeoutError as err:
-            _LOGGER.error("Timeout controlling switch %s: %s", relay, err)
+            _LOGGER.warning(
+                "2N switch control relay=%s timed out: %s", relay, err
+            )
             return False
         except aiohttp.ClientError as err:
-            _LOGGER.error("Error controlling switch %s: %s", relay, err)
+            _LOGGER.warning(
+                "2N switch control relay=%s transport error: %s", relay, err
+            )
             return False
         except Exception as err:
-            _LOGGER.error("Unexpected error controlling switch %s: %s", relay, err)
+            _LOGGER.error(
+                "2N switch control relay=%s unexpected error: %s", relay, err
+            )
             return False
 
     async def async_get_snapshot(
@@ -1247,46 +1473,62 @@ class TwoNIntercomAPI:
                     content_type = response.headers.get("Content-Type", "")
                     if "image" not in content_type:
                         error_body = await response.text()
-                        request_url = str(response.url)
+                        try:
+                            payload = json.loads(error_body)
+                        except json.JSONDecodeError:
+                            payload = None
+
+                        error = parse_device_error(payload)
 
                         # 2N firmware refuses any width/height that is not in
                         # /api/camera/caps jpegResolution. HA's entity-registry
                         # preview probes the camera at 80x80, which always falls
                         # outside that list. We retry once at the always-supported
-                        # 640x480 size; only escalate to ERROR if that also fails.
-                        error_code = None
-                        try:
-                            payload = json.loads(error_body)
-                            error_code = payload.get("error", {}).get("code")
-                        except json.JSONDecodeError:
-                            error_code = None
-
-                        if error_code == 12 and (width, height) != (640, 480):
+                        # 640x480 size and only escalate if that also fails.
+                        if (
+                            error is not None
+                            and error.code == 12
+                            and (width, height) != (640, 480)
+                        ):
                             _LOGGER.debug(
-                                "Snapshot at %dx%d rejected (code 12); retrying at 640x480",
+                                "Snapshot at %dx%d rejected by device "
+                                "(%s); retrying at 640x480",
                                 width,
                                 height,
+                                error.format(),
                             )
-                            return await self.async_get_snapshot(width=640, height=480)
+                            return await self.async_get_snapshot(
+                                width=640, height=480
+                            )
 
-                        _LOGGER.error(
-                            "Snapshot returned non-image content-type: %s body=%s request_url=%s params=%s",
-                            content_type,
-                            error_body,
-                            request_url,
-                            params,
-                        )
+                        if error is not None:
+                            log_device_error(
+                                logging.WARNING,
+                                "camera snapshot",
+                                CAMERA_SNAPSHOT_PATH,
+                                params,
+                                error,
+                            )
+                        else:
+                            _LOGGER.warning(
+                                "Snapshot returned non-image content-type: "
+                                "%s body=%s request_url=%s params=%s",
+                                content_type,
+                                error_body,
+                                str(response.url),
+                                params,
+                            )
                         return None
                     return await response.read()
-                    
+
         except asyncio.TimeoutError as err:
-            _LOGGER.error("Timeout getting snapshot: %s", err)
+            _LOGGER.warning("2N camera snapshot timed out: %s", err)
             return None
         except aiohttp.ClientError as err:
-            _LOGGER.error("Error getting snapshot: %s", err)
+            _LOGGER.warning("2N camera snapshot transport error: %s", err)
             return None
         except Exception as err:
-            _LOGGER.error("Unexpected error getting snapshot: %s", err)
+            _LOGGER.error("2N camera snapshot unexpected error: %s", err)
             return None
 
     def _get_rtsp_port(self) -> int:

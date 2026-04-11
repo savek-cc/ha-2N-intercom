@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import logging
 import unittest
 from unittest.mock import patch
 
@@ -21,6 +22,105 @@ def load_api_module():
     ensure_package("custom_components.2n_intercom")
     load_module("custom_components.2n_intercom.const", CONST_PATH)
     return load_module("custom_components.2n_intercom.api", API_PATH)
+
+
+class DeviceErrorParserTests(unittest.TestCase):
+    """Unit tests for the centralized 2N error-payload parser.
+
+    These guard the only place in the integration that decides whether
+    a non-success response is "fine, ignore it" or "warning, action
+    failed". The 2N firmware overloads ``code 14`` for at least two
+    distinct conditions, so the parser MUST disambiguate by description
+    string and not by code alone.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.api_module = load_api_module()
+
+    def test_parse_returns_none_for_success_payload(self) -> None:
+        self.assertIsNone(
+            self.api_module.parse_device_error({"success": True, "result": {}})
+        )
+
+    def test_parse_returns_none_for_non_dict_payload(self) -> None:
+        self.assertIsNone(self.api_module.parse_device_error(None))
+        self.assertIsNone(self.api_module.parse_device_error("oops"))
+
+    def test_parse_extracts_code_description_and_param(self) -> None:
+        error = self.api_module.parse_device_error(
+            {
+                "success": False,
+                "error": {
+                    "code": 11,
+                    "description": "missing mandatory parameter",
+                    "param": "session",
+                },
+            }
+        )
+        assert error is not None
+        self.assertEqual(error.code, 11)
+        self.assertEqual(error.description, "missing mandatory parameter")
+        self.assertEqual(error.param, "session")
+
+    def test_parse_handles_success_false_without_error_block(self) -> None:
+        error = self.api_module.parse_device_error({"success": False})
+        assert error is not None
+        self.assertIsNone(error.code)
+        self.assertEqual(error.description, "")
+        self.assertIsNone(error.param)
+
+    def test_session_not_found_is_recognised_as_idempotent(self) -> None:
+        error = self.api_module.parse_device_error(
+            {
+                "success": False,
+                "error": {"code": 14, "description": "session not found"},
+            }
+        )
+        assert error is not None
+        self.assertTrue(error.is_unspecified_session_not_found())
+
+    def test_unsupported_content_type_is_NOT_idempotent(self) -> None:
+        """Code 14 is overloaded; ``Unsupported Content-Type`` means the
+        request was REJECTED, not that the post-condition was met. The
+        previous blanket ``if code == 14: return True`` shortcut masked
+        this for months — see commit a5fe738."""
+        error = self.api_module.parse_device_error(
+            {
+                "success": False,
+                "error": {
+                    "code": 14,
+                    "description": "Unsupported Content-Type",
+                },
+            }
+        )
+        assert error is not None
+        self.assertFalse(error.is_unspecified_session_not_found())
+
+    def test_other_codes_never_treated_as_idempotent_session_not_found(self) -> None:
+        for code, desc in (
+            (8, "invalid authentication method"),
+            (11, "missing mandatory parameter"),
+            (12, "invalid parameter value"),
+            (None, ""),
+        ):
+            with self.subTest(code=code):
+                error = self.api_module.parse_device_error(
+                    {
+                        "success": False,
+                        "error": {"code": code, "description": desc},
+                    }
+                )
+                assert error is not None
+                self.assertFalse(error.is_unspecified_session_not_found())
+
+    def test_format_renders_present_fields_only(self) -> None:
+        cls = self.api_module.TwoNDeviceError
+        self.assertEqual(cls(code=14, description="", param=None).format(), "code=14")
+        self.assertEqual(
+            cls(code=11, description="missing mandatory parameter", param="session").format(),
+            "code=11 description='missing mandatory parameter' param='session'",
+        )
 
 
 class CameraTransportApiTests(unittest.TestCase):
@@ -445,6 +545,107 @@ class CallControlApiTests(unittest.IsolatedAsyncioTestCase):
         result = await api.async_hangup_call("session-live")
 
         self.assertFalse(result)
+
+    async def test_hangup_call_logs_warning_with_full_device_error(self) -> None:
+        """Genuine action failures must surface as WARNING in the log,
+        carrying the full ``code/description/param`` payload so the user
+        can grep ``ha:2n_intercom`` and immediately see what the device
+        rejected. Idempotent ``session not found`` is the only flavour
+        that may stay at DEBUG."""
+        api = self._make_api(
+            {
+                "success": False,
+                "error": {
+                    "code": 14,
+                    "description": "Unsupported Content-Type",
+                },
+            }
+        )
+
+        with self.assertLogs(
+            "custom_components.2n_intercom.api", level="WARNING"
+        ) as captured:
+            result = await api.async_hangup_call("session-live")
+
+        self.assertFalse(result)
+        joined = "\n".join(captured.output)
+        self.assertIn("rejected by device", joined)
+        self.assertIn("code=14", joined)
+        self.assertIn("Unsupported Content-Type", joined)
+
+    async def test_hangup_call_session_not_found_does_NOT_warn(self) -> None:
+        api = self._make_api(
+            {
+                "success": False,
+                "error": {"code": 14, "description": "session not found"},
+            }
+        )
+
+        with self.assertNoLogs(
+            "custom_components.2n_intercom.api", level="WARNING"
+        ):
+            result = await api.async_hangup_call("session-stale")
+
+        self.assertTrue(result)
+
+    async def test_get_phone_status_logs_warning_on_device_failure(self) -> None:
+        """Read endpoints used to swallow ``success: false`` and return
+        ``{}``, which made an unauthenticated/unauthorised firmware look
+        identical to "device has no SIP accounts". The remediation routes
+        every rejection through the same parser as the action endpoints
+        and emits a WARNING with the full code/description so users can
+        grep ``ha:2n_intercom`` and immediately see what was rejected."""
+        api = self._make_api(
+            {
+                "success": False,
+                "error": {
+                    "code": 8,
+                    "description": "invalid authentication method",
+                },
+            }
+        )
+
+        with self.assertLogs(
+            "custom_components.2n_intercom.api", level="WARNING"
+        ) as captured:
+            result = await api.async_get_phone_status()
+
+        self.assertEqual(result, {})
+        joined = "\n".join(captured.output)
+        self.assertIn("phone status", joined)
+        self.assertIn("rejected by device", joined)
+        self.assertIn("code=8", joined)
+        self.assertIn("invalid authentication method", joined)
+
+    async def test_switch_control_logs_warning_with_param_on_device_failure(self) -> None:
+        """The user-facing door-opener path: a button press that the
+        firmware refuses MUST surface as a WARNING containing the
+        relay/action and the parsed code/description/param payload —
+        this is the most user-visible failure mode and used to be
+        completely silent."""
+        api = self._make_api(
+            {
+                "success": False,
+                "error": {
+                    "code": 11,
+                    "param": "switch",
+                    "description": "missing mandatory parameter",
+                },
+            }
+        )
+
+        with self.assertLogs(
+            "custom_components.2n_intercom.api", level="WARNING"
+        ) as captured:
+            result = await api.async_switch_control(relay=1, action="on")
+
+        self.assertFalse(result)
+        joined = "\n".join(captured.output)
+        self.assertIn("switch control relay=1 action=on", joined)
+        self.assertIn("rejected by device", joined)
+        self.assertIn("code=11", joined)
+        self.assertIn("param='switch'", joined)
+        self.assertIn("missing mandatory parameter", joined)
 
     async def test_get_phone_status_returns_result_payload(self) -> None:
         api = self._make_api(
