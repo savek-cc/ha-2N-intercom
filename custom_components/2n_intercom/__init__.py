@@ -5,8 +5,14 @@ import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
-from homeassistant.core import HomeAssistant
+from homeassistant.const import (
+    CONF_HOST,
+    CONF_PASSWORD,
+    CONF_PORT,
+    CONF_USERNAME,
+    EVENT_HOMEASSISTANT_STOP,
+)
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
 from .api import TwoNIntercomAPI
@@ -301,6 +307,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     _register_call_services(hass)
     await coordinator.async_start_log_listener()
+
+    # Stop the long-poll log listener early in HA shutdown so the in-flight
+    # /api/log/pull request can wind down before HA's final-writes stage,
+    # otherwise the task is reported as "still running after final writes
+    # shutdown stage". Wrapping in entry.async_on_unload makes the listener
+    # auto-remove on entry reload so it never stacks.
+    async def _async_stop_log_listener_on_shutdown(_event: Event | None = None) -> None:
+        await coordinator.async_stop_log_listener()
+
+    entry.async_on_unload(
+        hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STOP, _async_stop_log_listener_on_shutdown
+        )
+    )
 
     platforms = _get_platforms(entry)
     await hass.config_entries.async_forward_entry_setups(entry, platforms)

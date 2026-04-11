@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 import unittest
@@ -26,11 +27,13 @@ def _install_homeassistant_stubs() -> None:
     const.CONF_PASSWORD = "password"
     const.CONF_PORT = "port"
     const.CONF_USERNAME = "username"
+    const.EVENT_HOMEASSISTANT_STOP = "homeassistant_stop"
     sys.modules["homeassistant.const"] = const
 
     core = types.ModuleType("homeassistant.core")
     core.HomeAssistant = object
     core.ServiceCall = object
+    core.Event = object
     sys.modules["homeassistant.core"] = core
 
     exceptions = types.ModuleType("homeassistant.exceptions")
@@ -102,15 +105,23 @@ class FakeConfigEntry:
         self.entry_id = entry_id
         self.data = data
         self.options = options or {}
-        self._unload_callback = None
+        self.runtime_data: object = None
+        self._unload_callbacks: list[object] = []
         self._update_listener = None
+        self._background_tasks: list[asyncio.Task] = []
 
     def add_update_listener(self, listener):
         self._update_listener = listener
         return listener
 
     def async_on_unload(self, callback) -> None:
-        self._unload_callback = callback
+        self._unload_callbacks.append(callback)
+
+    def async_create_background_task(self, hass, coro, name=None, eager_start=False):
+        del hass, name, eager_start
+        task = asyncio.ensure_future(coro)
+        self._background_tasks.append(task)
+        return task
 
 
 class FakeConfigEntries:
@@ -133,10 +144,22 @@ class FakeConfigEntries:
         return list(self._entries)
 
 
+class FakeBus:
+    """Minimal stand-in for hass.bus used by the shutdown listener wiring."""
+
+    def __init__(self) -> None:
+        self.listeners: list[tuple[str, object]] = []
+
+    def async_listen_once(self, event_type, callback):  # noqa: D401 — match HA shape
+        self.listeners.append((event_type, callback))
+        return lambda: self.listeners.remove((event_type, callback))
+
+
 class FakeHass:
     def __init__(self, entries: list[FakeConfigEntry]) -> None:
         self.services = FakeServiceRegistry()
         self.config_entries = FakeConfigEntries(entries)
+        self.bus = FakeBus()
         self.data: dict[str, object] = {}
         self.components = types.SimpleNamespace(
             persistent_notification=types.SimpleNamespace(async_create=lambda *a, **k: None)

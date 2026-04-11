@@ -394,13 +394,30 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
                     )
 
     async def async_start_log_listener(self) -> None:
-        """Start the background log-listener task if it is not already running."""
+        """Start the background log-listener task if it is not already running.
+
+        The task is registered against the config entry's background-task pool
+        so HA tracks its ownership and cancels it on entry unload. The
+        EVENT_HOMEASSISTANT_STOP listener wired up in __init__.py also calls
+        async_stop_log_listener() so we get a graceful unsubscribe BEFORE the
+        final-writes shutdown stage; otherwise the long-poll task strands and
+        HA logs a "still running after final writes shutdown" warning.
+        """
         if self._log_listener_task is not None and not self._log_listener_task.done():
             return
 
         self._log_listener_stopped = False
-        create_task = getattr(self.hass, "async_create_task", asyncio.create_task)
-        self._log_listener_task = create_task(self._async_log_listener_loop())
+        coro = self._async_log_listener_loop()
+        entry = getattr(self, "config_entry", None)
+        if entry is not None:
+            self._log_listener_task = entry.async_create_background_task(
+                self.hass,
+                coro,
+                name=f"{DOMAIN} log listener {entry.entry_id}",
+                eager_start=True,
+            )
+        else:
+            self._log_listener_task = self.hass.async_create_task(coro)
 
     async def async_stop_log_listener(self) -> None:
         """Stop the background log-listener task and unsubscribe active channel."""
