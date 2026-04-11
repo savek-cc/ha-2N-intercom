@@ -66,13 +66,88 @@ def check_homekit_in_manifest():
     manifest_file = COMPONENT_DIR / "manifest.json"
     with open(manifest_file) as f:
         manifest = json.load(f)
-    
+
     if "homekit" in manifest:
         print("✓ HomeKit support declared in manifest.json")
         return True
     else:
         print("✗ HomeKit support not declared in manifest.json")
         return False
+
+
+def check_manifest_compliance():
+    """Check that manifest.json meets HA 2026.4+ expectations.
+
+    Catches the regression class of M7: bundled deps reappearing,
+    iot_class drifting back to ``local_polling``, integration_type
+    going missing, etc.
+    """
+    manifest_file = COMPONENT_DIR / "manifest.json"
+    with open(manifest_file) as f:
+        manifest = json.load(f)
+
+    ok = True
+
+    if manifest.get("requirements", []) != []:
+        print(
+            f"✗ manifest.requirements must be empty (HA core ships aiohttp); "
+            f"got {manifest.get('requirements')!r}"
+        )
+        ok = False
+    else:
+        print("✓ manifest.requirements is empty")
+
+    iot_class = manifest.get("iot_class")
+    if iot_class != "local_push":
+        print(
+            f"✗ manifest.iot_class must be 'local_push' "
+            f"(integration uses log subscription); got {iot_class!r}"
+        )
+        ok = False
+    else:
+        print("✓ manifest.iot_class is local_push")
+
+    integration_type = manifest.get("integration_type")
+    if integration_type != "device":
+        print(
+            f"✗ manifest.integration_type must be 'device'; got {integration_type!r}"
+        )
+        ok = False
+    else:
+        print("✓ manifest.integration_type is device")
+
+    if not manifest.get("config_flow"):
+        print("✗ manifest.config_flow must be true")
+        ok = False
+    else:
+        print("✓ manifest.config_flow is true")
+
+    if not manifest.get("version"):
+        print("✗ manifest.version is missing")
+        ok = False
+    else:
+        print(f"✓ manifest.version is {manifest['version']}")
+
+    return ok
+
+
+def check_hacs_min_ha_version():
+    """Check that hacs.json points at the supported HA version."""
+    hacs_file = BASE_DIR / "hacs.json"
+    if not hacs_file.exists():
+        print("✗ hacs.json missing")
+        return False
+    with open(hacs_file) as f:
+        hacs = json.load(f)
+    min_version = hacs.get("homeassistant")
+    if not min_version or not min_version.startswith("2026."):
+        print(
+            f"✗ hacs.json homeassistant must target 2026.x or newer; "
+            f"got {min_version!r}"
+        )
+        return False
+    print(f"✓ hacs.json targets HA {min_version}")
+    return True
 
 
 def main():
@@ -123,9 +198,15 @@ def main():
     if not check_homekit_in_manifest():
         all_passed = False
 
-    # Skip manifest name/version syncing (name should not include version)
-    print("\n5. Skipping manifest name/version sync...")
-    print("✓ Manifest name is expected to be versionless")
+    # Check manifest content for HA 2026.4+ compliance
+    print("\n5. Checking manifest compliance...")
+    if not check_manifest_compliance():
+        all_passed = False
+
+    # Check HACS metadata
+    print("\n6. Checking HACS metadata...")
+    if not check_hacs_min_ha_version():
+        all_passed = False
     
     # Summary
     print("\n" + "=" * 60)

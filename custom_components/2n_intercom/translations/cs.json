@@ -58,6 +58,11 @@
     },
     "error": {
       "cannot_connect": "Nepodařilo se připojit k zařízení. Zkontrolujte prosím IP adresu, port a přihlašovací údaje."
+    },
+    "abort": {
+      "already_configured": "Toto zařízení 2N Intercom je již nakonfigurováno.",
+      "reauth_successful": "Přihlašovací údaje byly úspěšně aktualizovány.",
+      "reconfigure_successful": "Nastavení zařízení bylo úspěšně aktualizováno."
     }
   },
   "options": {
@@ -123,6 +128,40 @@
       "options": {
         "door": "Dveře (momentální spínač)",
         "gate": "Vrata (garážová vrata)"
+      }
+    }
+  },
+  "services": {
+    "answer_call": {
+      "name": "Přijmout hovor",
+      "description": "Přijmout aktivní hovor 2N Intercom nebo konkrétní relaci.",
+      "fields": {
+        "config_entry_id": {
+          "name": "ID konfigurace",
+          "description": "Cílit na konkrétní záznam 2N Intercom, pokud je načteno více."
+        },
+        "session_id": {
+          "name": "ID relace",
+          "description": "Přepsat aktivní relaci hovoru, kterou přijmout."
+        }
+      }
+    },
+    "hangup_call": {
+      "name": "Zavěsit hovor",
+      "description": "Zavěsit aktivní hovor 2N Intercom nebo konkrétní relaci.",
+      "fields": {
+        "config_entry_id": {
+          "name": "ID konfigurace",
+          "description": "Cílit na konkrétní záznam 2N Intercom, pokud je načteno více."
+        },
+        "session_id": {
+          "name": "ID relace",
+          "description": "Přepsat aktivní relaci hovoru, kterou zavěsit."
+        },
+        "reason": {
+          "name": "Důvod",
+          "description": "Důvod zavěšení odeslaný zařízení."
+        }
       }
     }
   }

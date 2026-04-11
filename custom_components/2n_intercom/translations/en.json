@@ -58,6 +58,11 @@
     },
     "error": {
       "cannot_connect": "Failed to connect to the device. Please check the IP address, port, and credentials."
+    },
+    "abort": {
+      "already_configured": "This 2N Intercom device is already configured.",
+      "reauth_successful": "Authentication updated successfully.",
+      "reconfigure_successful": "Device configuration updated successfully."
     }
   },
   "options": {
@@ -145,6 +150,40 @@
       "options": {
         "door": "Door (momentary switch)",
         "gate": "Gate (garage door opener)"
+      }
+    }
+  },
+  "services": {
+    "answer_call": {
+      "name": "Answer call",
+      "description": "Answer the active 2N Intercom call session or a specific session.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry ID",
+          "description": "Target a specific 2N Intercom config entry when more than one is loaded."
+        },
+        "session_id": {
+          "name": "Session ID",
+          "description": "Override the active call session to answer."
+        }
+      }
+    },
+    "hangup_call": {
+      "name": "Hang up call",
+      "description": "Hang up the active 2N Intercom call session or a specific session.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry ID",
+          "description": "Target a specific 2N Intercom config entry when more than one is loaded."
+        },
+        "session_id": {
+          "name": "Session ID",
+          "description": "Override the active call session to hang up."
+        },
+        "reason": {
+          "name": "Reason",
+          "description": "Hangup reason sent to the device."
+        }
       }
     }
   }

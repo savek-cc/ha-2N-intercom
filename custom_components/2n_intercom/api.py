@@ -333,9 +333,16 @@ class TwoNIntercomAPI:
         path: str,
         *,
         params: dict[str, Any] | None = None,
-        include_auth: bool = True,
+        include_auth: bool = False,
     ) -> str:
-        """Build an HTTP/HTTPS URL for external consumers."""
+        """Build an HTTP/HTTPS URL for external consumers.
+
+        ``include_auth`` defaults to False so the returned URL never leaks the
+        intercom credentials into HA logs, dashboards, or diagnostics. The
+        camera entity passes username/password to ``MjpegCamera`` separately;
+        the only callers that should opt back in are RTSP-style helpers
+        whose protocol requires the credentials in the URI.
+        """
         auth_prefix = ""
         if include_auth:
             auth_prefix = (
@@ -372,7 +379,7 @@ class TwoNIntercomAPI:
         width: int = DEFAULT_CAMERA_MJPEG_WIDTH,
         height: int = DEFAULT_CAMERA_MJPEG_HEIGHT,
         source: str = DEFAULT_CAMERA_SOURCE,
-        include_auth: bool = True,
+        include_auth: bool = False,
     ) -> str:
         """Build a direct snapshot URL."""
         return self._build_http_url(
@@ -392,7 +399,7 @@ class TwoNIntercomAPI:
         height: int = DEFAULT_CAMERA_MJPEG_HEIGHT,
         fps: int = DEFAULT_CAMERA_MJPEG_FPS,
         source: str = DEFAULT_CAMERA_SOURCE,
-        include_auth: bool = True,
+        include_auth: bool = False,
     ) -> str:
         """Build a direct MJPEG URL for consumers that need a ffmpeg-usable source URL."""
         validated_fps = validate_mjpeg_fps(fps)

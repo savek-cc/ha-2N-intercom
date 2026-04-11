@@ -13,6 +13,7 @@ from enum import Enum, IntFlag
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCK_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "lock.py"
 CONST_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "const.py"
+ENTITY_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "entity.py"
 
 
 def _ensure_package(name: str) -> types.ModuleType:
@@ -96,6 +97,7 @@ def load_lock_module():
     coordinator_module = types.ModuleType("custom_components.2n_intercom.coordinator")
     coordinator_module.TwoNIntercomCoordinator = object
     sys.modules["custom_components.2n_intercom.coordinator"] = coordinator_module
+    _load_module("custom_components.2n_intercom.entity", ENTITY_PATH)
     lock_module = _load_module("custom_components.2n_intercom.lock", LOCK_PATH)
     return lock_module, const_module
 

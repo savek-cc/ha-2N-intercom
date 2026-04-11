@@ -170,8 +170,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass,
         api,
         called_id=data.get(CONF_CALLED_ID),
+        config_entry=entry,
     )
 
+    # Resolve static device descriptors (system info, switch/io caps, camera
+    # transport) once at setup so the per-tick refresh stays focused on real
+    # status data and doesn't burn ~17k requests/day re-fetching constants.
+    await coordinator.async_initialize_static_caches()
     await coordinator.async_config_entry_first_refresh()
 
     hass.data[DOMAIN][entry.entry_id] = {

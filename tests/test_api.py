@@ -143,13 +143,18 @@ class CameraTransportApiTests(unittest.TestCase):
             protocol="https",
         )
 
+        # Default must NOT embed credentials. The camera entity passes
+        # username/password to MjpegCamera separately so logs and HA
+        # diagnostics never see them in the URL.
         url = api.build_mjpeg_url(width=640, height=480, fps=7, source="internal")
 
         self.assertEqual(
             url,
-            "https://user%40example.com:p%40ss%20word@intercom.local:8443"
+            "https://intercom.local:8443"
             "/api/camera/snapshot?source=internal&width=640&height=480&fps=7",
         )
+        self.assertNotIn("user", url)
+        self.assertNotIn("p%40ss", url)
 
     def test_build_mjpeg_url_can_omit_credentials(self) -> None:
         api = self.api_module.TwoNIntercomAPI(

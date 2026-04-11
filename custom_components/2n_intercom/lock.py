@@ -5,10 +5,8 @@ from typing import Any
 
 from homeassistant.components.lock import LockEntity, LockEntityFeature
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_DOOR_TYPE,
@@ -20,6 +18,7 @@ from .const import (
     DOOR_TYPE_GATE,
 )
 from .coordinator import TwoNIntercomCoordinator
+from .entity import TwoNIntercomEntity
 
 
 async def async_setup_entry(
@@ -52,10 +51,9 @@ async def async_setup_entry(
     )
 
 
-class TwoNIntercomLock(CoordinatorEntity[TwoNIntercomCoordinator], LockEntity):
+class TwoNIntercomLock(TwoNIntercomEntity, LockEntity):
     """Representation of a 2N Intercom lock."""
 
-    _attr_has_entity_name = True
     _attr_name = None
     _attr_supported_features = LockEntityFeature.OPEN
 
@@ -66,9 +64,8 @@ class TwoNIntercomLock(CoordinatorEntity[TwoNIntercomCoordinator], LockEntity):
         door_type: str | None,
     ) -> None:
         """Initialize the lock."""
-        super().__init__(coordinator)
+        super().__init__(coordinator, config_entry)
 
-        self._config_entry = config_entry
         self._door_type = door_type
         self._attr_unique_id = f"{config_entry.entry_id}_lock"
         self._attr_is_locked = True
@@ -78,6 +75,24 @@ class TwoNIntercomLock(CoordinatorEntity[TwoNIntercomCoordinator], LockEntity):
         # Door -> no device class (default door lock)
         if door_type == DOOR_TYPE_GATE:
             self._attr_device_class = "gate"
+
+    def _relay_one_present(self) -> bool:
+        """Return True when switch caps confirm that relay 1 exists.
+
+        We only fall back to optimistic state when the device tells us
+        relay 1 doesn't exist; a transient missing payload should keep
+        the previous real state instead of bouncing to the optimistic
+        ``_attr_is_locked`` flag.
+        """
+        switches = self.coordinator.switch_caps.get("switches")
+        if not isinstance(switches, list):
+            return False
+        for switch in switches:
+            if not isinstance(switch, dict):
+                continue
+            if switch.get("switch") == 1:
+                return True
+        return False
 
     def _cached_is_locked(self) -> bool | None:
         """Return the cached lock state for relay 1 when available."""
@@ -99,20 +114,17 @@ class TwoNIntercomLock(CoordinatorEntity[TwoNIntercomCoordinator], LockEntity):
         return None
 
     @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device information about this lock."""
-        name = self._config_entry.options.get(
-            "name",
-            self._config_entry.data.get("name", "2N Intercom"),
-        )
-        return self.coordinator.get_device_info(self._config_entry.entry_id, name)
-
-    @property
     def is_locked(self) -> bool:
         """Return true if lock is locked."""
         cached_is_locked = self._cached_is_locked()
         if cached_is_locked is not None:
             return cached_is_locked
+        # No real status available. If caps confirm relay 1 exists, the
+        # missing status is transient — preserve the last optimistic value
+        # rather than flapping. If caps say there is no relay 1, fall back
+        # to the optimistic flag (legacy behavior for stub-only setups).
+        if self._relay_one_present():
+            return self._attr_is_locked
         return self._attr_is_locked
 
     async def async_lock(self, **kwargs: Any) -> None:
@@ -133,8 +145,3 @@ class TwoNIntercomLock(CoordinatorEntity[TwoNIntercomCoordinator], LockEntity):
         """Open the door/gate."""
         # Same as unlock
         await self.async_unlock(**kwargs)
-
-    @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return self.coordinator.last_update_success

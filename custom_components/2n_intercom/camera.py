@@ -1,12 +1,11 @@
 """Camera platform for 2N Intercom."""
 from __future__ import annotations
 
-from datetime import timedelta
 import logging
-import time
 from typing import Any
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.components.mjpeg import MjpegCamera
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -14,7 +13,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import CameraTransportInfo
 from .const import (
-    DEFAULT_LIVE_VIEW_MODE,
     DOMAIN,
     LIVE_VIEW_MODE_MJPEG,
     LIVE_VIEW_MODE_RTSP,
@@ -22,9 +20,6 @@ from .const import (
 from .coordinator import TwoNIntercomCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-
-# Cache snapshots for 1 second to avoid excessive API calls
-SNAPSHOT_CACHE_DURATION = timedelta(seconds=1)
 
 
 def _transport_has_live_view(transport_info: CameraTransportInfo) -> bool:
@@ -38,7 +33,12 @@ def get_stream_source_for_transport(
     api,
     transport_info: CameraTransportInfo,
 ) -> str | None:
-    """Build a stream source URL for the chosen transport."""
+    """Build a stream source URL for the chosen transport.
+
+    The MJPEG path always returns a credentials-free URL — the camera
+    entity passes username/password to ``MjpegCamera`` directly. RTSP
+    keeps creds in the URI because that's how the protocol works.
+    """
     if not _transport_has_live_view(transport_info):
         return None
 
@@ -51,7 +51,6 @@ def get_stream_source_for_transport(
             height=transport_info.mjpeg_height,
             fps=transport_info.mjpeg_fps,
             source=transport_info.source,
-            include_auth=not transport_info.mjpeg_public_url_available,
         )
 
     return None
@@ -75,46 +74,64 @@ async def async_setup_entry(
     coordinator: TwoNIntercomCoordinator = hass.data[DOMAIN][config_entry.entry_id][
         "coordinator"
     ]
-    
+
     async_add_entities(
         [TwoNIntercomCamera(coordinator, config_entry)],
         True,
     )
 
 
-class TwoNIntercomCamera(CoordinatorEntity[TwoNIntercomCoordinator], Camera):
-    """Representation of a 2N Intercom camera."""
+class TwoNIntercomCamera(
+    CoordinatorEntity[TwoNIntercomCoordinator], MjpegCamera
+):
+    """Representation of a 2N Intercom camera.
+
+    Inherits from ``MjpegCamera`` so the live MJPEG stream is served
+    natively to the frontend without ffmpeg, and so credentials are
+    passed via the ``username``/``password`` fields instead of being
+    embedded in the URL (which would leak them into HA logs and
+    diagnostics — see roadmap §8 H1).
+    """
 
     _attr_has_entity_name = True
     _attr_name = "Camera"
+
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
         config_entry: ConfigEntry,
     ) -> None:
         """Initialize the camera."""
-        super().__init__(coordinator)
-        Camera.__init__(self)
-        
-        self._config_entry = config_entry
-        self._attr_unique_id = f"{config_entry.entry_id}_camera"
-        self._last_snapshot: bytes | None = None
-        self._last_snapshot_time: float = 0
-        self._transport_info = coordinator.api.camera_transport_info
+        api = coordinator.api
+        transport_info = coordinator.camera_transport_info
 
-    async def async_added_to_hass(self) -> None:
-        """Schedule transport detection after the entity is added."""
-        await super().async_added_to_hass()
-        if self.hass is not None:
-            self.hass.async_create_task(self._async_refresh_transport_info())
-
-    async def _async_refresh_transport_info(self) -> CameraTransportInfo:
-        """Refresh cached transport info from the API."""
-        self._transport_info = await self.coordinator.api.async_get_camera_transport_info(
-            requested_mode=DEFAULT_LIVE_VIEW_MODE,
+        # Build credentials-free URLs; auth is passed below as separate
+        # username/password fields and applied via HTTP Basic at fetch time.
+        mjpeg_url = api.build_mjpeg_url(
+            width=transport_info.mjpeg_width,
+            height=transport_info.mjpeg_height,
+            fps=transport_info.mjpeg_fps,
+            source=transport_info.source,
         )
-        self.async_write_ha_state()
-        return self._transport_info
+        still_image_url = api.build_snapshot_url(
+            width=transport_info.mjpeg_width,
+            height=transport_info.mjpeg_height,
+            source=transport_info.source,
+        )
+
+        CoordinatorEntity.__init__(self, coordinator)
+        MjpegCamera.__init__(
+            self,
+            mjpeg_url=mjpeg_url,
+            still_image_url=still_image_url,
+            username=getattr(api, "username", None),
+            password=getattr(api, "password", "") or "",
+            verify_ssl=getattr(api, "verify_ssl", True),
+            unique_id=f"{config_entry.entry_id}_camera",
+        )
+
+        self._config_entry = config_entry
+        self._transport_info = transport_info
 
     @property
     def device_info(self) -> dict[str, Any]:
@@ -148,12 +165,12 @@ class TwoNIntercomCamera(CoordinatorEntity[TwoNIntercomCoordinator], Camera):
     @property
     def supported_features(self) -> CameraEntityFeature:
         """Return supported features based on the selected live-view transport."""
-        return get_supported_features_for_transport(self._transport_info)
+        return get_supported_features_for_transport(self.coordinator.camera_transport_info)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Expose camera capability and transport details."""
-        transport_info = self._transport_info
+        transport_info = self.coordinator.camera_transport_info
         return {
             "live_view_requested_mode": transport_info.requested_mode,
             "live_view_selected_mode": transport_info.selected_mode,
@@ -177,30 +194,20 @@ class TwoNIntercomCamera(CoordinatorEntity[TwoNIntercomCoordinator], Camera):
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        """Return bytes of camera image."""
-        # Check cache to avoid excessive API calls
-        current_time = time.time()
-        
-        if (
-            self._last_snapshot is not None
-            and current_time - self._last_snapshot_time < SNAPSHOT_CACHE_DURATION.total_seconds()
-        ):
-            return self._last_snapshot
-        
-        # Fetch new snapshot
-        snapshot = await self.coordinator.async_get_snapshot(
-            width=width, height=height
-        )
-        
-        if snapshot:
-            self._last_snapshot = snapshot
-            self._last_snapshot_time = current_time
-        
-        return snapshot
+        """Return bytes of camera image, going through the coordinator's cache."""
+        return await self.coordinator.async_get_snapshot(width=width, height=height)
 
     async def stream_source(self) -> str | None:
-        """Return the source of the stream."""
-        transport_info = await self._async_refresh_transport_info()
+        """Return the stream source for RTSP transports.
+
+        MJPEG transports are served by ``MjpegCamera`` directly without
+        ffmpeg, so we only return a stream URL when the resolved transport
+        is RTSP. The URL is read from the coordinator's cached transport
+        info (resolved once at setup) — no per-call probe.
+        """
+        transport_info = self.coordinator.camera_transport_info
+        if transport_info.selected_mode != LIVE_VIEW_MODE_RTSP:
+            return None
         return get_stream_source_for_transport(self.coordinator.api, transport_info)
 
     @property

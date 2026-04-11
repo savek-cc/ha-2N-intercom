@@ -8,10 +8,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import TwoNIntercomCoordinator
+from .entity import TwoNIntercomEntity
 
 
 async def async_setup_entry(
@@ -33,13 +33,10 @@ async def async_setup_entry(
     )
 
 
-class _TwoNIntercomDiagnosticSensor(
-    CoordinatorEntity[TwoNIntercomCoordinator], SensorEntity
-):
+class _TwoNIntercomDiagnosticSensor(TwoNIntercomEntity, SensorEntity):
     """Base class for diagnostic sensors."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_has_entity_name = True
 
     def __init__(
         self,
@@ -48,24 +45,9 @@ class _TwoNIntercomDiagnosticSensor(
         name: str,
         unique_id_suffix: str,
     ) -> None:
-        super().__init__(coordinator)
-        self._config_entry = config_entry
+        super().__init__(coordinator, config_entry)
         self._attr_name = name
         self._attr_unique_id = f"{config_entry.entry_id}_{unique_id_suffix}"
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device information for the integration device."""
-        name = self._config_entry.options.get(
-            "name",
-            self._config_entry.data.get("name", "2N Intercom"),
-        )
-        return self.coordinator.get_device_info(self._config_entry.entry_id, name)
-
-    @property
-    def available(self) -> bool:
-        """Return whether the entity is available."""
-        return self.coordinator.last_update_success
 
 
 class TwoNIntercomSipRegistrationStatusSensor(_TwoNIntercomDiagnosticSensor):

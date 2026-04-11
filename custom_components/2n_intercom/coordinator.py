@@ -5,7 +5,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import timedelta, datetime
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
@@ -14,8 +14,27 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from .api import TwoNIntercomAPI, TwoNAuthenticationError, TwoNConnectionError
-from .const import CALLED_ID_ALL, DOMAIN, DEFAULT_SCAN_INTERVAL
+from .api import (
+    CameraTransportInfo,
+    TwoNAuthenticationError,
+    TwoNConnectionError,
+    TwoNIntercomAPI,
+)
+from .const import CALLED_ID_ALL, DEFAULT_LIVE_VIEW_MODE, DEFAULT_SCAN_INTERVAL, DOMAIN
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+
+# ConfigEntryAuthFailed lives in homeassistant.exceptions but the test stubs
+# don't ship it. Import lazily so module load works in any HA shape; raising
+# it in real HA still triggers the reauth flow.
+try:
+    from homeassistant.exceptions import (  # type: ignore[attr-defined]
+        ConfigEntryAuthFailed,
+    )
+except ImportError:  # pragma: no cover - test stub fallback
+    class ConfigEntryAuthFailed(ConfigEntryNotReady):
+        """Fallback for HA stubs that lack ConfigEntryAuthFailed."""
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,6 +46,10 @@ MAX_BACKOFF_DELAY = 60
 SNAPSHOT_CACHE_DURATION = 1
 # Doorbell pulse duration (seconds)
 DOORBELL_PULSE_DURATION = 1
+# Log listener backoff bounds
+LOG_LISTENER_INITIAL_BACKOFF = 5
+LOG_LISTENER_MAX_BACKOFF = 60
+LOG_LISTENER_PULL_ERROR_DELAY = 1
 
 
 @dataclass
@@ -56,15 +79,25 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
         api: TwoNIntercomAPI,
         scan_interval: int = DEFAULT_SCAN_INTERVAL,
         called_id: str | None = None,
+        config_entry: ConfigEntry | None = None,
     ) -> None:
         """Initialize the coordinator."""
-        super().__init__(
-            hass,
-            _LOGGER,
-            name=DOMAIN,
-            update_interval=timedelta(seconds=scan_interval),
-        )
+        # HA 2024.10+ accepts config_entry kwarg; pass when available so log
+        # lines and unhandled exceptions are tagged with the entry id.
+        coordinator_kwargs: dict[str, Any] = {
+            "name": DOMAIN,
+            "update_interval": timedelta(seconds=scan_interval),
+        }
+        if config_entry is not None:
+            coordinator_kwargs["config_entry"] = config_entry
+        try:
+            super().__init__(hass, _LOGGER, **coordinator_kwargs)
+        except TypeError:
+            # Fallback for older HA stubs (e.g. unit tests) without config_entry kwarg.
+            coordinator_kwargs.pop("config_entry", None)
+            super().__init__(hass, _LOGGER, **coordinator_kwargs)
         self.api = api
+        self.config_entry = config_entry
         self._last_call_state: dict[str, Any] = {}
         self._ring_detected = False
         self._last_ring_time: datetime | None = None
@@ -88,6 +121,8 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
         self._ring_pulse_until: datetime | None = None
         self._log_subscription_id: int | None = None
         self._log_listener_task: asyncio.Task | None = None
+        self._log_listener_stopped = False
+        self._camera_transport_info: CameraTransportInfo | None = None
 
     @staticmethod
     def _normalize_peer(peer: str | None) -> str | None:
@@ -270,18 +305,18 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
 
         return True
 
-    async def _async_log_listener_loop(self) -> None:
-        """Subscribe to call-related log events and apply them as they arrive."""
-        subscription_id = await self.api.async_subscribe_log(
-            ["CallStateChanged", "CallSessionStateChanged"]
-        )
-        if subscription_id is None:
-            return
+    async def _async_run_log_subscription(self, subscription_id: int) -> None:
+        """Drain events for an established subscription until it errors out."""
+        while not self._log_listener_stopped:
+            try:
+                events = await self.api.async_pull_log(subscription_id, timeout=1)
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.debug(
+                    "Pull failed for log subscription %s: %s", subscription_id, err
+                )
+                await asyncio.sleep(LOG_LISTENER_PULL_ERROR_DELAY)
+                raise
 
-        self._log_subscription_id = subscription_id
-
-        while True:
-            events = await self.api.async_pull_log(subscription_id, timeout=1)
             updated = False
             for event in events:
                 updated = self._process_log_event(event) or updated
@@ -289,18 +324,76 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
             if updated and hasattr(self, "async_update_listeners"):
                 self.async_update_listeners()
 
+            # Yield to the loop; the device blocks server-side via timeout=1
+            # so this does not become a busy-loop on the success path.
             await asyncio.sleep(0)
+
+    async def _async_log_listener_loop(self) -> None:
+        """Subscribe to call log events with resilient retry/backoff."""
+        backoff = LOG_LISTENER_INITIAL_BACKOFF
+        while not self._log_listener_stopped:
+            subscription_id: int | None = None
+            try:
+                subscription_id = await self.api.async_subscribe_log(
+                    ["CallStateChanged", "CallSessionStateChanged"]
+                )
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.debug("Log subscription failed: %s", err)
+
+            if subscription_id is None:
+                _LOGGER.debug(
+                    "Log subscribe returned no id; retrying in %ss", backoff
+                )
+                try:
+                    await asyncio.sleep(backoff)
+                except asyncio.CancelledError:
+                    raise
+                backoff = min(backoff * 2, LOG_LISTENER_MAX_BACKOFF)
+                continue
+
+            _LOGGER.debug(
+                "Log subscription %s established; entering pull loop",
+                subscription_id,
+            )
+            self._log_subscription_id = subscription_id
+            backoff = LOG_LISTENER_INITIAL_BACKOFF
+
+            try:
+                await self._async_run_log_subscription(subscription_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.debug(
+                    "Log subscription %s dropped: %s; will resubscribe",
+                    subscription_id,
+                    err,
+                )
+            finally:
+                if self._log_subscription_id == subscription_id:
+                    self._log_subscription_id = None
+                # Best-effort unsubscribe; ignore failures because the channel
+                # may already be gone server-side.
+                try:
+                    await self.api.async_unsubscribe_log(subscription_id)
+                except Exception as err:  # pylint: disable=broad-except
+                    _LOGGER.debug(
+                        "Cleanup unsubscribe for %s failed: %s",
+                        subscription_id,
+                        err,
+                    )
 
     async def async_start_log_listener(self) -> None:
         """Start the background log-listener task if it is not already running."""
         if self._log_listener_task is not None and not self._log_listener_task.done():
             return
 
+        self._log_listener_stopped = False
         create_task = getattr(self.hass, "async_create_task", asyncio.create_task)
         self._log_listener_task = create_task(self._async_log_listener_loop())
 
     async def async_stop_log_listener(self) -> None:
         """Stop the background log-listener task and unsubscribe active channel."""
+        self._log_listener_stopped = True
         subscription_id = self._log_subscription_id
         task = self._log_listener_task
         self._log_listener_task = None
@@ -321,70 +414,128 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
                 if self._log_subscription_id == subscription_id:
                     self._log_subscription_id = None
 
+    async def _refresh_secondary_cache(
+        self,
+        cache_attr: str,
+        method_name: str,
+        label: str,
+        *,
+        log_level: str = "debug",
+    ) -> dict[str, Any]:
+        """Refresh a cached secondary endpoint, returning the cached value on failure."""
+        fetcher = getattr(self.api, method_name, None)
+        if fetcher is None or not callable(fetcher):
+            _LOGGER.debug(
+                "API does not expose %s; using cached %s",
+                method_name,
+                label,
+            )
+            cached_value = getattr(self, cache_attr)
+            return cached_value or {}
+
+        try:
+            value = await fetcher()
+        except Exception as err:  # pylint: disable=broad-except
+            log_message = f"Failed to fetch {label}: %s"
+            if log_level == "warning":
+                _LOGGER.warning(log_message, err)
+            else:
+                _LOGGER.debug(log_message, err)
+            cached_value = getattr(self, cache_attr)
+            return cached_value or {}
+
+        setattr(self, cache_attr, value)
+        return value
+
+    async def async_initialize_static_caches(self) -> None:
+        """Fetch device metadata that does not change at runtime.
+
+        Called once during ``async_setup_entry``. ``switch/caps`` and
+        ``io/caps`` are static device descriptors; refetching them every five
+        seconds wastes ~17k device requests/day. We resolve them here so the
+        per-tick update path can stay focused on real status data.
+        """
+        if self._system_info is None:
+            try:
+                self._system_info = await self.api.async_get_system_info()
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.debug("Failed to fetch system info: %s", err)
+                self._system_info = {}
+
+        if self._switch_caps is None:
+            await self._refresh_secondary_cache(
+                "_switch_caps",
+                "async_get_switch_caps",
+                "switch caps",
+                log_level="warning",
+            )
+
+        if self._io_caps is None:
+            await self._refresh_secondary_cache(
+                "_io_caps",
+                "async_get_io_caps",
+                "io caps",
+                log_level="warning",
+            )
+
+        if self._camera_transport_info is None:
+            fetcher = getattr(self.api, "async_get_camera_transport_info", None)
+            if callable(fetcher):
+                try:
+                    self._camera_transport_info = await fetcher(
+                        requested_mode=DEFAULT_LIVE_VIEW_MODE,
+                    )
+                except Exception as err:  # pylint: disable=broad-except
+                    _LOGGER.debug("Failed to resolve camera transport info: %s", err)
+                    self._camera_transport_info = getattr(
+                        self.api, "camera_transport_info", None
+                    )
+            else:
+                _LOGGER.debug(
+                    "API does not expose async_get_camera_transport_info; "
+                    "skipping static transport cache"
+                )
+
     async def _async_update_data(self) -> TwoNIntercomData:
         """Fetch data from API."""
         try:
             if self._system_info is None:
+                # Fallback path for tests / first refresh that bypass setup_entry.
                 try:
                     self._system_info = await self.api.async_get_system_info()
                 except Exception as err:  # pylint: disable=broad-except
                     _LOGGER.debug("Failed to fetch system info: %s", err)
                     self._system_info = {}
 
-            async def _refresh_secondary_cache(
-                cache_attr: str,
-                method_name: str,
-                label: str,
-                *,
-                log_level: str = "debug",
-            ) -> dict[str, Any]:
-                fetcher = getattr(self.api, method_name, None)
-                if fetcher is None or not callable(fetcher):
-                    _LOGGER.debug(
-                        "API does not expose %s; using cached %s",
-                        method_name,
-                        label,
-                    )
-                    cached_value = getattr(self, cache_attr)
-                    return cached_value or {}
-
-                try:
-                    value = await fetcher()
-                except Exception as err:  # pylint: disable=broad-except
-                    log_message = f"Failed to fetch {label}: %s"
-                    if log_level == "warning":
-                        _LOGGER.warning(log_message, err)
-                    else:
-                        _LOGGER.debug(log_message, err)
-                    cached_value = getattr(self, cache_attr)
-                    return cached_value or {}
-
-                setattr(self, cache_attr, value)
-                return value
-
-            phone_status = await _refresh_secondary_cache(
+            phone_status = await self._refresh_secondary_cache(
                 "_phone_status",
                 "async_get_phone_status",
                 "phone status",
             )
-            switch_caps = await _refresh_secondary_cache(
-                "_switch_caps",
-                "async_get_switch_caps",
-                "switch caps",
-                log_level="warning",
-            )
-            switch_status = await _refresh_secondary_cache(
+            # switch_caps / io_caps are static — fetched once at setup. Lazy fallback
+            # for callers (e.g. tests) that exercise _async_update_data directly.
+            if self._switch_caps is None:
+                await self._refresh_secondary_cache(
+                    "_switch_caps",
+                    "async_get_switch_caps",
+                    "switch caps",
+                    log_level="warning",
+                )
+            switch_caps = self._switch_caps or {}
+            switch_status = await self._refresh_secondary_cache(
                 "_switch_status",
                 "async_get_switch_status",
                 "switch status",
             )
-            io_caps = await _refresh_secondary_cache(
-                "_io_caps",
-                "async_get_io_caps",
-                "io caps",
-                log_level="warning",
-            )
-            io_status = await _refresh_secondary_cache(
+            if self._io_caps is None:
+                await self._refresh_secondary_cache(
+                    "_io_caps",
+                    "async_get_io_caps",
+                    "io caps",
+                    log_level="warning",
+                )
+            io_caps = self._io_caps or {}
+            io_status = await self._refresh_secondary_cache(
                 "_io_status",
                 "async_get_io_status",
                 "io status",
@@ -450,16 +601,13 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
             )
             
         except TwoNAuthenticationError as err:
-            # Authentication errors require user intervention
+            # Authentication errors require user intervention. Raising
+            # ConfigEntryAuthFailed triggers HA's reauth flow (registered in
+            # config_flow.async_step_reauth), which is the canonical 2026.4+
+            # path — replaces the removed hass.components.persistent_notification
+            # accessor.
             _LOGGER.error("Authentication failed: %s", err)
-            # Create persistent notification for user
-            self.hass.components.persistent_notification.async_create(
-                f"Authentication failed for 2N Intercom: {err}. "
-                "Please check your credentials and reconfigure the integration.",
-                title="2N Intercom Authentication Error",
-                notification_id=f"{DOMAIN}_auth_error",
-            )
-            raise ConfigEntryNotReady(f"Authentication failed: {err}") from err
+            raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
             
         except (TwoNConnectionError, ConnectionError, TimeoutError) as err:
             # Connection errors - use retry counter for tracking
@@ -559,6 +707,13 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
     def io_status(self) -> dict[str, Any]:
         """Return cached IO status."""
         return self._io_status or {}
+
+    @property
+    def camera_transport_info(self) -> CameraTransportInfo:
+        """Return the camera transport info resolved during setup."""
+        if self._camera_transport_info is not None:
+            return self._camera_transport_info
+        return self.api.camera_transport_info
 
     def get_device_info(self, entry_id: str, name: str) -> dict[str, Any]:
         """Build device info for entities."""

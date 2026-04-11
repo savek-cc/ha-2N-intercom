@@ -66,5 +66,6 @@ DEFAULT_CAMERA_SOURCE = "internal"
 CAMERA_MJPEG_FPS_MIN = 1
 CAMERA_MJPEG_FPS_MAX = 15
 
-# Platforms
-PLATFORMS = ["camera", "binary_sensor", "switch", "cover", "lock"]
+# Platforms — the actual platform list is built dynamically by
+# ``__init__._get_platforms()`` based on whether the entry has relays
+# configured. There is no static module-level PLATFORMS constant.

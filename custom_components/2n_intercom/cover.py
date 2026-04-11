@@ -13,7 +13,6 @@ from homeassistant.components.cover import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_RELAY_DEVICE_TYPE,
@@ -26,6 +25,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import TwoNIntercomCoordinator
+from .entity import TwoNIntercomEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,10 +54,9 @@ async def async_setup_entry(
         async_add_entities(covers, True)
 
 
-class TwoNIntercomCover(CoordinatorEntity[TwoNIntercomCoordinator], CoverEntity):
+class TwoNIntercomCover(TwoNIntercomEntity, CoverEntity):
     """Representation of a 2N Intercom cover (for gates)."""
 
-    _attr_has_entity_name = True
     _attr_device_class = CoverDeviceClass.GATE
     _attr_supported_features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE
 
@@ -68,31 +67,21 @@ class TwoNIntercomCover(CoordinatorEntity[TwoNIntercomCoordinator], CoverEntity)
         relay_config: dict[str, Any],
     ) -> None:
         """Initialize the cover."""
-        super().__init__(coordinator)
-        
-        self._config_entry = config_entry
+        super().__init__(coordinator, config_entry)
+
         self._relay_config = relay_config
         self._relay_number = relay_config[CONF_RELAY_NUMBER]
         self._relay_name = relay_config[CONF_RELAY_NAME]
         self._pulse_duration = relay_config.get(
             CONF_RELAY_PULSE_DURATION, DEFAULT_GATE_DURATION
         )
-        
+
         self._attr_name = self._relay_name
         self._attr_unique_id = f"{config_entry.entry_id}_cover_{self._relay_number}"
         self._attr_is_closed = True
         self._is_opening = False
         self._is_closing = False
         self._state_task: asyncio.Task | None = None
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device information about this cover."""
-        name = self._config_entry.options.get(
-            "name",
-            self._config_entry.data.get("name", "2N Intercom"),
-        )
-        return self.coordinator.get_device_info(self._config_entry.entry_id, name)
 
     @property
     def is_closed(self) -> bool:
@@ -178,15 +167,10 @@ class TwoNIntercomCover(CoordinatorEntity[TwoNIntercomCoordinator], CoverEntity)
         try:
             # Wait for operation duration (convert milliseconds to seconds)
             await asyncio.sleep(self._pulse_duration / 1000)
-            
+
             self._is_closing = False
             self._attr_is_closed = True
             self.async_write_ha_state()
         except asyncio.CancelledError:
             # Task was cancelled, do nothing
             pass
-
-    @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return self.coordinator.last_update_success

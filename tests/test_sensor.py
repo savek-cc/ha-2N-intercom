@@ -11,6 +11,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONST_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "const.py"
+ENTITY_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "entity.py"
 SENSOR_PATH = REPO_ROOT / "custom_components" / "2n_intercom" / "sensor.py"
 
 
@@ -88,6 +89,7 @@ def load_sensor_module():
     coordinator_module = types.ModuleType("custom_components.2n_intercom.coordinator")
     coordinator_module.TwoNIntercomCoordinator = object
     sys.modules["custom_components.2n_intercom.coordinator"] = coordinator_module
+    _load_module("custom_components.2n_intercom.entity", ENTITY_PATH)
     return _load_module("custom_components.2n_intercom.sensor", SENSOR_PATH)
 
 

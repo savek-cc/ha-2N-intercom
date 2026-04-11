@@ -1,6 +1,7 @@
 """Config flow for 2N Intercom integration."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 import logging
 import json
@@ -127,6 +128,8 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._relays: list[dict[str, Any]] = []
         self._integration_name: str | None = None
         self._integration_version: str | None = None
+        self._reauth_entry: config_entries.ConfigEntry | None = None
+        self._reconfigure_entry: config_entries.ConfigEntry | None = None
 
     async def _ensure_integration_info(self) -> None:
         """Load and cache integration name/version."""
@@ -362,6 +365,174 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={"relay_number": str(relay_display_number)},
         )
 
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> FlowResult:
+        """Handle reauthentication when stored credentials stop working."""
+        self._reauth_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        if self._reauth_entry is not None:
+            self._data = {**self._reauth_entry.data, **self._reauth_entry.options}
+        else:
+            self._data = dict(entry_data)
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Prompt the user to confirm or update credentials."""
+        errors: dict[str, str] = {}
+        existing = self._data
+        api: TwoNIntercomAPI | None = None
+
+        if user_input is not None:
+            merged = {
+                **existing,
+                CONF_USERNAME: user_input[CONF_USERNAME],
+                CONF_PASSWORD: user_input[CONF_PASSWORD],
+            }
+            try:
+                api = TwoNIntercomAPI(
+                    host=merged[CONF_HOST],
+                    port=merged.get(CONF_PORT, DEFAULT_PORT_HTTPS),
+                    username=merged[CONF_USERNAME],
+                    password=merged[CONF_PASSWORD],
+                    protocol=merged.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
+                    verify_ssl=merged.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+                )
+                if not await api.async_test_connection():
+                    errors["base"] = "invalid_auth"
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.exception(
+                    "Reauth connection test failed host=%s",
+                    merged.get(CONF_HOST),
+                )
+                errors["base"] = "invalid_auth"
+            finally:
+                if api is not None:
+                    await api.async_close()
+
+            if not errors and self._reauth_entry is not None:
+                self.hass.config_entries.async_update_entry(
+                    self._reauth_entry, data=merged
+                )
+                await self.hass.config_entries.async_reload(
+                    self._reauth_entry.entry_id
+                )
+                return self.async_abort(reason="reauth_successful")
+
+        data_schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_USERNAME,
+                    default=existing.get(CONF_USERNAME, ""),
+                ): cv.string,
+                vol.Required(CONF_PASSWORD): cv.string,
+            }
+        )
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=data_schema,
+            errors=errors,
+            description_placeholders={
+                "host": str(existing.get(CONF_HOST, "")),
+            },
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Allow the user to change host/port/credentials without dropping the entry."""
+        self._reconfigure_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        if self._reconfigure_entry is not None:
+            self._data = {
+                **self._reconfigure_entry.data,
+                **self._reconfigure_entry.options,
+            }
+        return await self._async_reconfigure_user_step(user_input)
+
+    async def _async_reconfigure_user_step(
+        self, user_input: dict[str, Any] | None
+    ) -> FlowResult:
+        """Reuse the user step shape for reconfigure with current values prefilled."""
+        errors: dict[str, str] = {}
+        api: TwoNIntercomAPI | None = None
+
+        if user_input is not None:
+            try:
+                if CONF_PORT not in user_input:
+                    user_input[CONF_PORT] = (
+                        DEFAULT_PORT_HTTPS
+                        if user_input.get(CONF_PROTOCOL) == PROTOCOL_HTTPS
+                        else DEFAULT_PORT_HTTP
+                    )
+                api = TwoNIntercomAPI(
+                    host=user_input[CONF_HOST],
+                    port=user_input[CONF_PORT],
+                    username=user_input[CONF_USERNAME],
+                    password=user_input[CONF_PASSWORD],
+                    protocol=user_input.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
+                    verify_ssl=user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+                )
+                if not await api.async_test_connection():
+                    errors["base"] = "cannot_connect"
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.exception(
+                    "Reconfigure connection test failed host=%s",
+                    user_input.get(CONF_HOST),
+                )
+                errors["base"] = "cannot_connect"
+            finally:
+                if api is not None:
+                    await api.async_close()
+
+            if not errors and self._reconfigure_entry is not None:
+                merged = {**self._data, **user_input}
+                self.hass.config_entries.async_update_entry(
+                    self._reconfigure_entry, data=merged
+                )
+                await self.hass.config_entries.async_reload(
+                    self._reconfigure_entry.entry_id
+                )
+                return self.async_abort(reason="reconfigure_successful")
+
+        current = self._data
+        default_protocol = current.get(CONF_PROTOCOL, DEFAULT_PROTOCOL)
+        default_port = current.get(CONF_PORT) or (
+            DEFAULT_PORT_HTTPS
+            if default_protocol == PROTOCOL_HTTPS
+            else DEFAULT_PORT_HTTP
+        )
+        data_schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_HOST, default=current.get(CONF_HOST, "")
+                ): cv.string,
+                vol.Required(CONF_PORT, default=default_port): cv.port,
+                vol.Required(
+                    CONF_PROTOCOL, default=default_protocol
+                ): vol.In(PROTOCOLS),
+                vol.Required(
+                    CONF_USERNAME, default=current.get(CONF_USERNAME, "")
+                ): cv.string,
+                vol.Required(
+                    CONF_PASSWORD, default=current.get(CONF_PASSWORD, "")
+                ): cv.string,
+                vol.Required(
+                    CONF_VERIFY_SSL,
+                    default=current.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+                ): cv.boolean,
+            }
+        )
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=data_schema,
+            errors=errors,
+        )
+
     async def _async_create_entry(self) -> FlowResult:
         """Create the config entry."""
         await self._ensure_integration_info()
@@ -391,14 +562,19 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
     """Handle options flow for 2N Intercom."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        self._config_entry = config_entry
+        """Initialize options flow.
+
+        HA 2024.12+ provides ``self.config_entry`` automatically; we accept
+        the argument for backward compatibility with the existing
+        ``async_get_options_flow`` callable but do not store it.
+        """
+        del config_entry  # provided by the framework as self.config_entry
         self._data: dict[str, Any] = {}
         self._relays: list[dict[str, Any]] = []
 
     def _merged_data(self) -> dict[str, Any]:
         """Return merged config data with options overriding defaults."""
-        return {**self._config_entry.data, **self._config_entry.options}
+        return {**self.config_entry.data, **self.config_entry.options}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None

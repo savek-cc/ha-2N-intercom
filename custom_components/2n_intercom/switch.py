@@ -9,7 +9,6 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_RELAY_DEVICE_TYPE,
@@ -22,6 +21,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import TwoNIntercomCoordinator
+from .entity import TwoNIntercomEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,10 +50,8 @@ async def async_setup_entry(
         async_add_entities(switches, True)
 
 
-class TwoNIntercomSwitch(CoordinatorEntity[TwoNIntercomCoordinator], SwitchEntity):
+class TwoNIntercomSwitch(TwoNIntercomEntity, SwitchEntity):
     """Representation of a 2N Intercom switch (for doors)."""
-
-    _attr_has_entity_name = True
 
     def __init__(
         self,
@@ -62,29 +60,19 @@ class TwoNIntercomSwitch(CoordinatorEntity[TwoNIntercomCoordinator], SwitchEntit
         relay_config: dict[str, Any],
     ) -> None:
         """Initialize the switch."""
-        super().__init__(coordinator)
-        
-        self._config_entry = config_entry
+        super().__init__(coordinator, config_entry)
+
         self._relay_config = relay_config
         self._relay_number = relay_config[CONF_RELAY_NUMBER]
         self._relay_name = relay_config[CONF_RELAY_NAME]
         self._pulse_duration = relay_config.get(
             CONF_RELAY_PULSE_DURATION, DEFAULT_PULSE_DURATION
         )
-        
+
         self._attr_name = self._relay_name
         self._attr_unique_id = f"{config_entry.entry_id}_switch_{self._relay_number}"
         self._attr_is_on = False
         self._turning_off_task: asyncio.Task | None = None
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device information about this switch."""
-        name = self._config_entry.options.get(
-            "name",
-            self._config_entry.data.get("name", "2N Intercom"),
-        )
-        return self.coordinator.get_device_info(self._config_entry.entry_id, name)
 
     @property
     def is_on(self) -> bool:
@@ -133,8 +121,3 @@ class TwoNIntercomSwitch(CoordinatorEntity[TwoNIntercomCoordinator], SwitchEntit
         except asyncio.CancelledError:
             # Task was cancelled, do nothing
             pass
-
-    @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return self.coordinator.last_update_success

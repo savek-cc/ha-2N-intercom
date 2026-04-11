@@ -1,7 +1,6 @@
 """Binary sensor platform for 2N Intercom."""
 from __future__ import annotations
 
-from datetime import datetime
 import logging
 from typing import Any
 
@@ -13,10 +12,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import TwoNIntercomCoordinator
+from .entity import TwoNIntercomEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -77,12 +76,18 @@ async def async_setup_entry(
     )
 
 
-class TwoNIntercomDoorbell(CoordinatorEntity[TwoNIntercomCoordinator], BinarySensorEntity):
-    """Representation of a 2N Intercom doorbell."""
+class TwoNIntercomDoorbell(TwoNIntercomEntity, BinarySensorEntity):
+    """Representation of a 2N Intercom doorbell.
 
-    _attr_has_entity_name = True
+    Uses ``OCCUPANCY`` rather than ``DOORBELL`` because HomeKit's
+    programmable-switch / doorbell mapping wants the dedicated
+    HomeKit accessory wired up via the ``homekit`` integration —
+    occupancy gives the right HA semantics for "someone pressed
+    the button" without overloading device-class meaning.
+    """
+
     _attr_name = "Doorbell"
-    _attr_device_class = BinarySensorDeviceClass.OCCUPANCY  # Default, overridden in __init__
+    _attr_device_class = BinarySensorDeviceClass.OCCUPANCY
 
     def __init__(
         self,
@@ -90,27 +95,8 @@ class TwoNIntercomDoorbell(CoordinatorEntity[TwoNIntercomCoordinator], BinarySen
         config_entry: ConfigEntry,
     ) -> None:
         """Initialize the doorbell."""
-        super().__init__(coordinator)
-        
-        self._config_entry = config_entry
+        super().__init__(coordinator, config_entry)
         self._attr_unique_id = f"{config_entry.entry_id}_doorbell"
-        
-        # Prefer doorbell device class for HomeKit integration.
-        # If the enum is missing (older HA), fall back to raw string.
-        self._attr_device_class = getattr(
-            BinarySensorDeviceClass,
-            "DOORBELL",
-            "doorbell",
-        )
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device information about this doorbell."""
-        name = self._config_entry.options.get(
-            "name",
-            self._config_entry.data.get("name", "2N Intercom"),
-        )
-        return self.coordinator.get_device_info(self._config_entry.entry_id, name)
 
     @property
     def is_on(self) -> bool:
@@ -121,13 +107,13 @@ class TwoNIntercomDoorbell(CoordinatorEntity[TwoNIntercomCoordinator], BinarySen
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes."""
         attributes: dict[str, Any] = {}
-        
+
         if self.coordinator.last_ring_time:
             attributes["last_ring"] = self.coordinator.last_ring_time.isoformat()
 
         if self.coordinator.called_peer:
             attributes["called_peer"] = self.coordinator.called_peer
-        
+
         caller_info = self.coordinator.caller_info
         if caller_info:
             if "name" in caller_info:
@@ -136,7 +122,7 @@ class TwoNIntercomDoorbell(CoordinatorEntity[TwoNIntercomCoordinator], BinarySen
                 attributes["caller_number"] = caller_info["number"]
             if "button" in caller_info:
                 attributes["button"] = caller_info["button"]
-        
+
         # Add call status info if available
         if self.coordinator.data:
             call_status = self.coordinator.data.call_status
@@ -145,21 +131,13 @@ class TwoNIntercomDoorbell(CoordinatorEntity[TwoNIntercomCoordinator], BinarySen
                 attributes["call_state"] = call_state
             if call_status and "direction" in call_status:
                 attributes["call_direction"] = call_status["direction"]
-        
+
         return attributes
 
-    @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return self.coordinator.last_update_success
 
-
-class TwoNIntercomInput1Sensor(
-    CoordinatorEntity[TwoNIntercomCoordinator], BinarySensorEntity
-):
+class TwoNIntercomInput1Sensor(TwoNIntercomEntity, BinarySensorEntity):
     """Representation of the real IO input 1 state."""
 
-    _attr_has_entity_name = True
     _attr_name = "Input 1"
 
     def __init__(
@@ -168,19 +146,8 @@ class TwoNIntercomInput1Sensor(
         config_entry: ConfigEntry,
     ) -> None:
         """Initialize the input sensor."""
-        super().__init__(coordinator)
-
-        self._config_entry = config_entry
+        super().__init__(coordinator, config_entry)
         self._attr_unique_id = f"{config_entry.entry_id}_input1"
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device information about this input sensor."""
-        name = self._config_entry.options.get(
-            "name",
-            self._config_entry.data.get("name", "2N Intercom"),
-        )
-        return self.coordinator.get_device_info(self._config_entry.entry_id, name)
 
     @staticmethod
     def _is_port_on(io_status: dict[str, Any]) -> bool:
@@ -197,19 +164,11 @@ class TwoNIntercomInput1Sensor(
         """Return true if input 1 is active."""
         return self._is_port_on(self.coordinator.io_status)
 
-    @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return self.coordinator.last_update_success
 
-
-class TwoNIntercomRelay1ActiveSensor(
-    CoordinatorEntity[TwoNIntercomCoordinator], BinarySensorEntity
-):
+class TwoNIntercomRelay1ActiveSensor(TwoNIntercomEntity, BinarySensorEntity):
     """Representation of the relay 1 active state."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_has_entity_name = True
     _attr_name = "Relay 1 active"
 
     def __init__(
@@ -218,19 +177,8 @@ class TwoNIntercomRelay1ActiveSensor(
         config_entry: ConfigEntry,
     ) -> None:
         """Initialize the relay sensor."""
-        super().__init__(coordinator)
-
-        self._config_entry = config_entry
+        super().__init__(coordinator, config_entry)
         self._attr_unique_id = f"{config_entry.entry_id}_relay1_active"
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device information about this relay sensor."""
-        name = self._config_entry.options.get(
-            "name",
-            self._config_entry.data.get("name", "2N Intercom"),
-        )
-        return self.coordinator.get_device_info(self._config_entry.entry_id, name)
 
     @staticmethod
     def _is_switch_active(switch_status: dict[str, Any]) -> bool:
@@ -246,8 +194,3 @@ class TwoNIntercomRelay1ActiveSensor(
     def is_on(self) -> bool:
         """Return true if relay 1 is active."""
         return self._is_switch_active(self.coordinator.switch_status)
-
-    @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return self.coordinator.last_update_success
