@@ -325,5 +325,28 @@ class CameraStreamSourceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(camera_entity._password, "secret")
 
 
+    async def test_camera_entity_deletes_attr_name_set_by_mjpeg_camera(self) -> None:
+        """MjpegCamera.__init__ unconditionally sets self._attr_name = None,
+        which short-circuits HA's Entity._name_internal resolution and
+        prevents the translation_key 'camera' from producing a localized
+        suffix. The integration must delete _attr_name after MjpegCamera
+        init so the class-level _attr_translation_key wins."""
+        transport_info = self.api_module.CameraTransportInfo(
+            selected_mode=self.const_module.LIVE_VIEW_MODE_MJPEG,
+            resolved=True,
+            mjpeg_available=True,
+        )
+        camera_entity, _ = self._make_camera_entity(transport_info)
+
+        # _attr_name must NOT exist as an instance attribute
+        self.assertFalse(
+            hasattr(camera_entity, "_attr_name")
+            and "_attr_name" in camera_entity.__dict__,
+            "_attr_name instance attribute was not deleted after MjpegCamera init",
+        )
+        # _attr_translation_key must be set at class level
+        self.assertEqual(camera_entity._attr_translation_key, "camera")
+
+
 if __name__ == "__main__":
     unittest.main()

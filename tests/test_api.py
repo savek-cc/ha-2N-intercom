@@ -1035,5 +1035,86 @@ class CallControlApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport_info.selected_mode, api_module.LIVE_VIEW_MODE_MJPEG)
 
 
+class SessionOwnershipTests(unittest.IsolatedAsyncioTestCase):
+    """Tests for the inject-websession session-ownership contract.
+
+    When a caller injects a session via ``__init__``, the API must never
+    close it (HA manages its lifecycle). When no session is injected, the
+    API creates and owns its own session and is responsible for cleanup.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.api_module = load_api_module()
+
+    def test_injected_session_sets_owns_session_false(self) -> None:
+        import aiohttp
+
+        external_session = aiohttp.ClientSession()
+        api = self.api_module.TwoNIntercomAPI(
+            host="intercom.local",
+            username="user",
+            password="secret",
+            session=external_session,
+        )
+        self.assertFalse(api._owns_session)
+        self.assertIs(api._session, external_session)
+
+    def test_no_session_sets_owns_session_true(self) -> None:
+        api = self.api_module.TwoNIntercomAPI(
+            host="intercom.local",
+            username="user",
+            password="secret",
+        )
+        self.assertTrue(api._owns_session)
+        self.assertIsNone(api._session)
+
+    async def test_async_close_skips_injected_session(self) -> None:
+        import aiohttp
+
+        external_session = aiohttp.ClientSession()
+        api = self.api_module.TwoNIntercomAPI(
+            host="intercom.local",
+            username="user",
+            password="secret",
+            session=external_session,
+        )
+
+        await api.async_close()
+
+        # The injected session must NOT be closed by the API
+        self.assertFalse(external_session.closed)
+
+    async def test_async_close_closes_self_created_session(self) -> None:
+        api = self.api_module.TwoNIntercomAPI(
+            host="intercom.local",
+            username="user",
+            password="secret",
+        )
+
+        # Force the API to create its own session
+        session = await api.async_get_session()
+        self.assertTrue(api._owns_session)
+
+        await api.async_close()
+
+        self.assertTrue(session.closed)
+        self.assertIsNone(api._session)
+
+    async def test_async_get_session_fallback_marks_owned(self) -> None:
+        """When no session was injected and async_get_session creates one,
+        the new session must be marked as owned so async_close cleans it up."""
+        api = self.api_module.TwoNIntercomAPI(
+            host="intercom.local",
+            username="user",
+            password="secret",
+        )
+
+        session = await api.async_get_session()
+
+        self.assertIsNotNone(session)
+        self.assertTrue(api._owns_session)
+
+
 if __name__ == "__main__":
     unittest.main()

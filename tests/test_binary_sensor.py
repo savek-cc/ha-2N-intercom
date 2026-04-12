@@ -219,6 +219,45 @@ class BinarySensorPlatformTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(entity.is_on)
 
+    def test_doorbell_entity_has_translation_key(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        entity = binary_sensor_module.TwoNIntercomDoorbell(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Front Door"}),
+        )
+
+        self.assertEqual(entity._attr_translation_key, "doorbell")
+        self.assertTrue(entity._attr_has_entity_name)
+
+    def test_input1_entity_has_translation_key(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator(
+            io_caps={"ports": [{"port": "input1", "type": "input"}]},
+            io_status={"ports": [{"port": "input1", "state": 0}]},
+        )
+        entity = binary_sensor_module.TwoNIntercomInput1Sensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Front Door"}),
+        )
+
+        self.assertEqual(entity._attr_translation_key, "input_1")
+        self.assertTrue(entity._attr_has_entity_name)
+
+    def test_relay1_active_entity_has_translation_key(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator(
+            switch_caps={"switches": [{"switch": 1, "enabled": True}]},
+            switch_status={"switches": [{"switch": 1, "active": False}]},
+        )
+        entity = binary_sensor_module.TwoNIntercomRelay1ActiveSensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Front Door"}),
+        )
+
+        self.assertEqual(entity._attr_translation_key, "relay_1_active")
+        self.assertTrue(entity._attr_has_entity_name)
+
     def test_relay_sensor_uses_cached_switch_status_payload(self) -> None:
         binary_sensor_module = self.binary_sensor_module
         coordinator = FakeCoordinator(

@@ -127,6 +127,28 @@ class DiagnosticSensorTests(unittest.IsolatedAsyncioTestCase):
             ["entry-1_sip_registration", "entry-1_call_state"],
         )
 
+    def test_sip_registration_entity_has_translation_key(self) -> None:
+        sensor_module = self.sensor_module
+        coordinator = FakeCoordinator()
+        entity = sensor_module.TwoNIntercomSipRegistrationStatusSensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Front Door"}),
+        )
+
+        self.assertEqual(entity._attr_translation_key, "sip_registration")
+        self.assertTrue(entity._attr_has_entity_name)
+
+    def test_call_state_entity_has_translation_key(self) -> None:
+        sensor_module = self.sensor_module
+        coordinator = FakeCoordinator()
+        entity = sensor_module.TwoNIntercomCallStateSensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Front Door"}),
+        )
+
+        self.assertEqual(entity._attr_translation_key, "call_state")
+        self.assertTrue(entity._attr_has_entity_name)
+
     def test_sip_registration_sensor_derives_registered_state(self) -> None:
         sensor_module = self.sensor_module
         coordinator = FakeCoordinator(

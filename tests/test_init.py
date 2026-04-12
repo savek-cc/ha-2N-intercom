@@ -468,6 +468,228 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored_1.api.answer_calls, [])
         self.assertEqual(stored_2.api.answer_calls, ["session-two"])
 
+    async def test_async_setup_registers_services_before_any_entry(self) -> None:
+        """Services must be available after async_setup even with zero entries."""
+        init_module = self.init_module
+        const_module = self.const_module
+
+        hass = FakeHass([])
+
+        result = await init_module.async_setup(hass, {})
+
+        self.assertTrue(result)
+        self.assertTrue(hass.services.has_service(const_module.DOMAIN, "answer_call"))
+        self.assertTrue(hass.services.has_service(const_module.DOMAIN, "hangup_call"))
+
+    async def test_async_setup_is_idempotent(self) -> None:
+        """Calling async_setup twice must not raise or double-register."""
+        init_module = self.init_module
+        const_module = self.const_module
+
+        hass = FakeHass([])
+
+        await init_module.async_setup(hass, {})
+        await init_module.async_setup(hass, {})
+
+        self.assertTrue(hass.services.has_service(const_module.DOMAIN, "answer_call"))
+        self.assertTrue(hass.services.has_service(const_module.DOMAIN, "hangup_call"))
+
+    async def test_service_error_no_loaded_entries_has_translation_fields(self) -> None:
+        """When no entries are loaded, the error must carry translation metadata."""
+        init_module = self.init_module
+        const_module = self.const_module
+        HomeAssistantError = sys.modules["homeassistant.exceptions"].HomeAssistantError
+
+        hass = FakeHass([])
+        await init_module.async_setup(hass, {})
+
+        answer_call = hass.services.handlers[(const_module.DOMAIN, "answer_call")]
+
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await answer_call(types.SimpleNamespace(data={}))
+
+        self.assertEqual(ctx.exception.translation_domain, const_module.DOMAIN)
+        self.assertEqual(ctx.exception.translation_key, "no_loaded_entries")
+
+    async def test_service_error_ambiguous_entry_has_translation_fields(self) -> None:
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        HomeAssistantError = sys.modules["homeassistant.exceptions"].HomeAssistantError
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry_1 = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom-1.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        entry_2 = FakeConfigEntry(
+            "entry-2",
+            {
+                ha_const.CONF_HOST: "intercom-2.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry_1, entry_2])
+
+        await init_module.async_setup(hass, {})
+        await init_module.async_setup_entry(hass, entry_1)
+        entry_2.runtime_data = init_module.TwoNIntercomRuntimeData(
+            coordinator=types.SimpleNamespace(active_session_id="session-999"),
+            api=FakeAPI(),
+        )
+
+        answer_call = hass.services.handlers[(const_module.DOMAIN, "answer_call")]
+
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await answer_call(types.SimpleNamespace(data={}))
+
+        self.assertEqual(ctx.exception.translation_domain, const_module.DOMAIN)
+        self.assertEqual(ctx.exception.translation_key, "ambiguous_entry")
+
+    async def test_service_error_entry_not_loaded_has_translation_fields(self) -> None:
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        HomeAssistantError = sys.modules["homeassistant.exceptions"].HomeAssistantError
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+
+        await init_module.async_setup(hass, {})
+        await init_module.async_setup_entry(hass, entry)
+
+        answer_call = hass.services.handlers[(const_module.DOMAIN, "answer_call")]
+
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await answer_call(
+                types.SimpleNamespace(data={"config_entry_id": "nonexistent"})
+            )
+
+        self.assertEqual(ctx.exception.translation_domain, const_module.DOMAIN)
+        self.assertEqual(ctx.exception.translation_key, "entry_not_loaded")
+        self.assertEqual(
+            ctx.exception.translation_placeholders,
+            {"config_entry_id": "nonexistent"},
+        )
+
+    async def test_service_error_no_active_session_has_translation_fields(self) -> None:
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        HomeAssistantError = sys.modules["homeassistant.exceptions"].HomeAssistantError
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+
+        await init_module.async_setup(hass, {})
+        await init_module.async_setup_entry(hass, entry)
+        # Clear the active session so _resolve_session_id raises
+        entry.runtime_data.coordinator._active_session_id = None
+        entry.runtime_data.api._call_status = {
+            "state": "idle",
+            "sessions": [],
+        }
+
+        answer_call = hass.services.handlers[(const_module.DOMAIN, "answer_call")]
+
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await answer_call(types.SimpleNamespace(data={}))
+
+        self.assertEqual(ctx.exception.translation_domain, const_module.DOMAIN)
+        self.assertEqual(ctx.exception.translation_key, "no_active_session")
+
+    async def test_service_error_answer_call_failed_has_translation_fields(self) -> None:
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        HomeAssistantError = sys.modules["homeassistant.exceptions"].HomeAssistantError
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+
+        await init_module.async_setup(hass, {})
+        await init_module.async_setup_entry(hass, entry)
+        entry.runtime_data.api = FakeAPI(answer_result=False)
+
+        answer_call = hass.services.handlers[(const_module.DOMAIN, "answer_call")]
+
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await answer_call(types.SimpleNamespace(data={}))
+
+        self.assertEqual(ctx.exception.translation_domain, const_module.DOMAIN)
+        self.assertEqual(ctx.exception.translation_key, "answer_call_failed")
+        self.assertEqual(
+            ctx.exception.translation_placeholders,
+            {"session_id": "session-123"},
+        )
+
+    async def test_service_error_hangup_call_failed_has_translation_fields(self) -> None:
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        HomeAssistantError = sys.modules["homeassistant.exceptions"].HomeAssistantError
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+
+        await init_module.async_setup(hass, {})
+        await init_module.async_setup_entry(hass, entry)
+        entry.runtime_data.api = FakeAPI(hangup_result=False)
+
+        hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
+
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await hangup_call(
+                types.SimpleNamespace(data={"session_id": "explicit-session"})
+            )
+
+        self.assertEqual(ctx.exception.translation_domain, const_module.DOMAIN)
+        self.assertEqual(ctx.exception.translation_key, "hangup_call_failed")
+        self.assertIn("explicit-session", ctx.exception.translation_placeholders["session_id"])
+
     async def test_setup_and_unload_manage_log_listener_lifecycle(self) -> None:
         init_module = self.init_module
         ha_const = sys.modules["homeassistant.const"]
