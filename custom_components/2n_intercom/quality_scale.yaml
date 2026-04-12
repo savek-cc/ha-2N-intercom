@@ -65,11 +65,7 @@ rules:
   entity-disabled-by-default: done
   entity-translations: done
   exception-translations: done
-  icon-translations:
-    status: exempt
-    comment: |
-      All entities derive their icon from a device class or platform default;
-      no custom icon mapping is needed.
+  icon-translations: done
   reconfiguration-flow: done
   repair-issues:
     status: exempt

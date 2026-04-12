@@ -1,0 +1,37 @@
+{
+  "entity": {
+    "binary_sensor": {
+      "doorbell": {
+        "default": "mdi:doorbell"
+      },
+      "input_1": {
+        "default": "mdi:electric-switch"
+      },
+      "relay_1_active": {
+        "default": "mdi:electric-switch"
+      }
+    },
+    "sensor": {
+      "sip_registration": {
+        "default": "mdi:phone-check"
+      },
+      "call_state": {
+        "default": "mdi:phone",
+        "state": {
+          "idle": "mdi:phone-hangup",
+          "ringing": "mdi:phone-ring",
+          "active": "mdi:phone-in-talk"
+        }
+      }
+    },
+    "camera": {
+      "camera": {
+        "default": "mdi:doorbell-video"
+      }
+    }
+  },
+  "services": {
+    "answer_call": "mdi:phone-in-talk",
+    "hangup_call": "mdi:phone-hangup"
+  }
+}
