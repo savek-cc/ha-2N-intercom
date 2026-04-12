@@ -12,8 +12,9 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.helpers import selector
+from homeassistant.helpers.selector import SelectOptionDict
 import homeassistant.helpers.config_validation as cv
 
 from .api import TwoNIntercomAPI
@@ -38,7 +39,10 @@ from .const import (
     CONF_RELAY_NUMBER,
     CONF_RELAY_PULSE_DURATION,
     CONF_RELAYS,
+    CONF_RTSP_PASSWORD,
+    CONF_RTSP_USERNAME,
     CONF_SCAN_INTERVAL,
+    CONF_SERIAL_NUMBER,
     CONF_VERIFY_SSL,
     DEFAULT_CAMERA_MJPEG_FPS,
     DEFAULT_CAMERA_MJPEG_HEIGHT,
@@ -136,7 +140,7 @@ async def _async_get_called_peers(data: dict[str, Any]) -> list[str]:
             await api.async_close()
 
 
-class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg,misc]
     """Handle a config flow for 2N Intercom."""
 
     VERSION = 1
@@ -174,9 +178,9 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle the initial step - connection settings."""
-        errors = {}
+        errors: dict[str, str] = {}
         api: TwoNIntercomAPI | None = None
 
         if user_input is not None:
@@ -210,6 +214,18 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )
                     errors["base"] = "cannot_connect"
                 else:
+                    # Fetch stable device identity for unique-id
+                    try:
+                        sys_info = await api.async_get_system_info()
+                    except Exception:  # pylint: disable=broad-except
+                        sys_info = {}
+                    serial = (
+                        sys_info.get("serialNumber")
+                        or sys_info.get("macAddr")
+                        or ""
+                    )
+                    if serial:
+                        user_input[CONF_SERIAL_NUMBER] = str(serial).strip()
                     # Store data and move to device configuration
                     self._data = user_input
 
@@ -281,9 +297,9 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_device(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle device configuration step."""
-        errors = {}
+        errors: dict[str, str] = {}
 
         if user_input is not None:
             self._data.update(user_input)
@@ -300,12 +316,12 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         await self._ensure_integration_info()
         default_name = self._integration_name or "2N Intercom"
         peers = await _async_get_called_peers(self._data)
-        called_options = [
-            {
-                "label": _all_calls_label(self.hass.config.language),
-                "value": CALLED_ID_ALL,
-            }
-        ] + [{"label": peer, "value": peer} for peer in peers]
+        called_options: list[SelectOptionDict] = [
+            SelectOptionDict(
+                label=_all_calls_label(self.hass.config.language),
+                value=CALLED_ID_ALL,
+            ),
+        ] + [SelectOptionDict(label=peer, value=peer) for peer in peers]
         default_called = self._data.get(CONF_CALLED_ID) or CALLED_ID_ALL
 
         called_field = selector.SelectSelector(
@@ -342,7 +358,7 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_relay(
         self, user_input: dict[str, Any] | None = None, relay_index: int = 0
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Collect relay name/number/device-type for one relay.
 
         The pulse-duration field is intentionally NOT in this step: its sane
@@ -351,7 +367,7 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         schema cannot cross-reference siblings. We collect the type here and
         defer the duration to ``async_step_relay_pulse``.
         """
-        errors = {}
+        errors: dict[str, str] = {}
 
         if user_input is not None:
             self._pending_relay = user_input
@@ -383,9 +399,9 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_relay_pulse(
         self, user_input: dict[str, Any] | None = None, relay_index: int = 0
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Collect the pulse duration for the relay added in ``async_step_relay``."""
-        errors = {}
+        errors: dict[str, str] = {}
         relay_count = self._data.get(CONF_RELAY_COUNT, DEFAULT_RELAY_COUNT)
         pending = getattr(self, "_pending_relay", None) or {}
         device_type = pending.get(CONF_RELAY_DEVICE_TYPE, DEVICE_TYPE_DOOR)
@@ -428,20 +444,20 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_reauth(
         self, entry_data: Mapping[str, Any]
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle reauthentication when stored credentials stop working."""
         self._reauth_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
         if self._reauth_entry is not None:
-            self._data = {**self._reauth_entry.data, **self._reauth_entry.options}
+            self._data = dict(self._reauth_entry.data)
         else:
             self._data = dict(entry_data)
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Prompt the user to confirm or update credentials."""
         errors: dict[str, str] = {}
         existing = self._data
@@ -503,21 +519,18 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Allow the user to change host/port/credentials without dropping the entry."""
         self._reconfigure_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
         )
         if self._reconfigure_entry is not None:
-            self._data = {
-                **self._reconfigure_entry.data,
-                **self._reconfigure_entry.options,
-            }
+            self._data = dict(self._reconfigure_entry.data)
         return await self._async_reconfigure_user_step(user_input)
 
     async def _async_reconfigure_user_step(
         self, user_input: dict[str, Any] | None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Reuse the user step shape for reconfigure with current values prefilled."""
         errors: dict[str, str] = {}
         api: TwoNIntercomAPI | None = None
@@ -594,16 +607,32 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def _async_create_entry(self) -> FlowResult:
+    async def _async_create_entry(self) -> ConfigFlowResult:
         """Create the config entry."""
         await self._ensure_integration_info()
         entry_name = self._data.get("name", self._integration_name or "2N Intercom")
         title = self._name_with_version(entry_name)
 
-        await self.async_set_unique_id(
-            f"{self._data[CONF_HOST]}_{entry_name}"
-        )
+        # Use device serial/MAC as the unique id so the same physical
+        # intercom cannot be added twice, regardless of display name or
+        # host/IP changes. Fall back to host when the device did not
+        # return a serial (very old firmware).
+        serial = self._data.get(CONF_SERIAL_NUMBER)
+        unique_id = serial if serial else self._data[CONF_HOST]
+        await self.async_set_unique_id(unique_id)
         self._abort_if_unique_id_configured()
+
+        # Guard against duplicates when an older entry was created with a
+        # host-based unique_id before serial support was added. Check all
+        # existing entries for the same domain by host or serial overlap.
+        new_host = self._data.get(CONF_HOST)
+        domain = getattr(self, "handler", "2n_intercom")
+        for entry in self.hass.config_entries.async_entries(domain):
+            existing_data = entry.data or {}
+            if serial and existing_data.get(CONF_SERIAL_NUMBER) == serial:
+                return self.async_abort(reason="already_configured")
+            if new_host and existing_data.get(CONF_HOST) == new_host:
+                return self.async_abort(reason="already_configured")
 
         return self.async_create_entry(
             title=title,
@@ -611,7 +640,7 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     @staticmethod
-    @callback
+    @callback  # type: ignore[untyped-decorator]
     def async_get_options_flow(
         config_entry: config_entries.ConfigEntry,
     ) -> TwoNIntercomOptionsFlow:
@@ -619,8 +648,16 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return TwoNIntercomOptionsFlow(config_entry)
 
 
-class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
-    """Handle options flow for 2N Intercom."""
+class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):  # type: ignore[misc]
+    """Handle options flow for 2N Intercom.
+
+    The options flow manages **behavioral** preferences only: polling
+    interval, feature toggles, relay configuration, camera transport
+    settings.  Connection identity (host, port, credentials, SSL) lives
+    exclusively in ``entry.data`` and is changed through the reconfigure
+    or reauth flows — never through options.  This prevents the
+    options-flow output from shadowing a successful reauth/reconfigure.
+    """
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow.
@@ -634,126 +671,38 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
         self._relays: list[dict[str, Any]] = []
         self._pending_relay: dict[str, Any] | None = None
 
-    def _merged_data(self) -> dict[str, Any]:
-        """Return merged config data with options overriding defaults."""
-        return {**self.config_entry.data, **self.config_entry.options}
+    def _current_option(self, key: str, default: Any = None) -> Any:
+        """Return current value for a behavioral option.
+
+        Prefers ``entry.options`` (previously saved options-flow output),
+        falls back to ``entry.data`` (initial setup values), then *default*.
+        """
+        if key in self.config_entry.options:
+            return self.config_entry.options[key]
+        return self.config_entry.data.get(key, default)
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Start full options flow at connection settings."""
-        return await self.async_step_user(user_input)
-
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle connection settings in options."""
-        errors = {}
-        current_data = self._merged_data()
-
-        if user_input is not None:
-            try:
-                if not user_input.get(CONF_USERNAME):
-                    user_input[CONF_USERNAME] = current_data.get(CONF_USERNAME, "")
-                if not user_input.get(CONF_PASSWORD):
-                    user_input[CONF_PASSWORD] = current_data.get(CONF_PASSWORD, "")
-
-                if CONF_PORT not in user_input:
-                    user_input[CONF_PORT] = (
-                        DEFAULT_PORT_HTTPS
-                        if user_input.get(CONF_PROTOCOL) == PROTOCOL_HTTPS
-                        else DEFAULT_PORT_HTTP
-                    )
-
-                api = TwoNIntercomAPI(
-                    host=user_input[CONF_HOST],
-                    port=user_input[CONF_PORT],
-                    username=user_input[CONF_USERNAME],
-                    password=user_input[CONF_PASSWORD],
-                    protocol=user_input.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
-                    verify_ssl=user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
-                )
-
-                if not await api.async_test_connection():
-                    _LOGGER.warning(
-                        "Options connection test failed host=%s port=%s protocol=%s verify_ssl=%s",
-                        user_input.get(CONF_HOST),
-                        user_input.get(CONF_PORT),
-                        user_input.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
-                        user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
-                    )
-                    errors["base"] = "cannot_connect"
-                else:
-                    await api.async_close()
-                    self._data = user_input
-                    return await self.async_step_device()
-
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception(
-                    "Options connection test exception host=%s port=%s protocol=%s verify_ssl=%s",
-                    user_input.get(CONF_HOST),
-                    user_input.get(CONF_PORT),
-                    user_input.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
-                    user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
-                )
-                errors["base"] = "cannot_connect"
-
-        default_protocol = (
-            user_input.get(CONF_PROTOCOL)
-            if user_input is not None
-            else current_data.get(CONF_PROTOCOL, DEFAULT_PROTOCOL)
-        )
-        default_port = current_data.get(CONF_PORT)
-        if default_port is None:
-            default_port = (
-                DEFAULT_PORT_HTTPS
-                if default_protocol == PROTOCOL_HTTPS
-                else DEFAULT_PORT_HTTP
-            )
-
-        data_schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_HOST, default=current_data.get(CONF_HOST, "")
-                ): cv.string,
-                vol.Required(CONF_PORT, default=default_port): cv.port,
-                vol.Required(
-                    CONF_PROTOCOL, default=default_protocol
-                ): vol.In(PROTOCOLS),
-                vol.Required(
-                    CONF_USERNAME, default=current_data.get(CONF_USERNAME, "")
-                ): cv.string,
-                vol.Required(
-                    CONF_PASSWORD, default=current_data.get(CONF_PASSWORD, "")
-                ): cv.string,
-                vol.Required(
-                    CONF_VERIFY_SSL,
-                    default=current_data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
-                ): cv.boolean,
-            }
-        )
-
-        return self.async_show_form(
-            step_id="user",
-            data_schema=data_schema,
-            errors=errors,
-        )
+    ) -> ConfigFlowResult:
+        """Start options flow directly at device preferences."""
+        return await self.async_step_device(user_input)
 
     async def async_step_device(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle device configuration step in options."""
-        errors = {}
-        current_data = self._merged_data()
+        errors: dict[str, str] = {}
 
-        peers = await _async_get_called_peers(current_data)
-        called_options = [
-            {
-                "label": _all_calls_label(self.hass.config.language),
-                "value": CALLED_ID_ALL,
-            }
-        ] + [{"label": peer, "value": peer} for peer in peers]
-        default_called = current_data.get(CONF_CALLED_ID) or CALLED_ID_ALL
+        # Connection data for the API call to fetch peers lives in entry.data.
+        conn_data = dict(self.config_entry.data)
+        peers = await _async_get_called_peers(conn_data)
+        called_options: list[SelectOptionDict] = [
+            SelectOptionDict(
+                label=_all_calls_label(self.hass.config.language),
+                value=CALLED_ID_ALL,
+            ),
+        ] + [SelectOptionDict(label=peer, value=peer) for peer in peers]
+        default_called = self._current_option(CONF_CALLED_ID) or CALLED_ID_ALL
 
         called_field = selector.SelectSelector(
             selector.SelectSelectorConfig(
@@ -763,7 +712,7 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
             )
         )
 
-        relays = current_data.get(CONF_RELAYS, [])
+        relays = self._current_option(CONF_RELAYS, [])
         derived_door_type = DOOR_TYPE_GATE if any(
             relay.get(CONF_RELAY_DEVICE_TYPE) == DEVICE_TYPE_GATE
             for relay in relays
@@ -800,31 +749,31 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
             {
                 vol.Required(
                     "name",
-                    default=current_data.get("name", "2N Intercom"),
+                    default=self._current_option("name", "2N Intercom"),
                 ): cv.string,
                 vol.Required(
                     CONF_ENABLE_CAMERA,
-                    default=current_data.get(CONF_ENABLE_CAMERA, DEFAULT_ENABLE_CAMERA),
+                    default=self._current_option(CONF_ENABLE_CAMERA, DEFAULT_ENABLE_CAMERA),
                 ): cv.boolean,
                 vol.Required(
                     CONF_ENABLE_DOORBELL,
-                    default=current_data.get(
+                    default=self._current_option(
                         CONF_ENABLE_DOORBELL, DEFAULT_ENABLE_DOORBELL
                     ),
                 ): cv.boolean,
                 vol.Required(
                     CONF_SCAN_INTERVAL,
-                    default=current_data.get(
+                    default=self._current_option(
                         CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
                     ),
                 ): scan_interval_field,
                 vol.Required(
                     CONF_RELAY_COUNT,
-                    default=current_data.get(CONF_RELAY_COUNT, DEFAULT_RELAY_COUNT),
+                    default=self._current_option(CONF_RELAY_COUNT, DEFAULT_RELAY_COUNT),
                 ): vol.In([0, 1, 2, 3, 4]),
                 vol.Required(
                     CONF_DOOR_TYPE,
-                    default=current_data.get(CONF_DOOR_TYPE, derived_door_type),
+                    default=self._current_option(CONF_DOOR_TYPE, derived_door_type),
                 ): vol.In(DOOR_TYPES),
                 vol.Optional(
                     CONF_CALLED_ID,
@@ -841,7 +790,7 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_camera(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle camera transport options.
 
         Lets the user override how the integration talks to the 2N camera —
@@ -852,7 +801,6 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
         ``async_reload``, no manual restart required.
         """
         errors: dict[str, str] = {}
-        current_data = self._merged_data()
 
         if user_input is not None:
             # Coerce NumberSelector outputs (which arrive as float) to ints
@@ -867,7 +815,7 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
         live_view_field = selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=[
-                    {"label": mode, "value": mode} for mode in LIVE_VIEW_MODES
+                    SelectOptionDict(label=mode, value=mode) for mode in LIVE_VIEW_MODES
                 ],
                 mode=selector.SelectSelectorMode.DROPDOWN,
                 translation_key=CONF_LIVE_VIEW_MODE,
@@ -883,7 +831,7 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
         camera_source_field = selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=[
-                    {"label": source, "value": source} for source in CAMERA_SOURCES
+                    SelectOptionDict(label=source, value=source) for source in CAMERA_SOURCES
                 ],
                 mode=selector.SelectSelectorMode.DROPDOWN,
                 translation_key=CONF_CAMERA_SOURCE,
@@ -916,31 +864,47 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
             {
                 vol.Required(
                     CONF_LIVE_VIEW_MODE,
-                    default=current_data.get(
+                    default=self._current_option(
                         CONF_LIVE_VIEW_MODE, DEFAULT_LIVE_VIEW_MODE
                     ),
                 ): live_view_field,
+                vol.Optional(
+                    CONF_RTSP_USERNAME,
+                    description={
+                        "suggested_value": self._current_option(
+                            CONF_RTSP_USERNAME, ""
+                        ),
+                    },
+                ): str,
+                vol.Optional(
+                    CONF_RTSP_PASSWORD,
+                    description={
+                        "suggested_value": self._current_option(
+                            CONF_RTSP_PASSWORD, ""
+                        ),
+                    },
+                ): str,
                 vol.Required(
                     CONF_CAMERA_SOURCE,
-                    default=current_data.get(
+                    default=self._current_option(
                         CONF_CAMERA_SOURCE, DEFAULT_CAMERA_SOURCE
                     ),
                 ): camera_source_field,
                 vol.Required(
                     CONF_MJPEG_WIDTH,
-                    default=current_data.get(
+                    default=self._current_option(
                         CONF_MJPEG_WIDTH, DEFAULT_CAMERA_MJPEG_WIDTH
                     ),
                 ): resolution_field,
                 vol.Required(
                     CONF_MJPEG_HEIGHT,
-                    default=current_data.get(
+                    default=self._current_option(
                         CONF_MJPEG_HEIGHT, DEFAULT_CAMERA_MJPEG_HEIGHT
                     ),
                 ): resolution_field,
                 vol.Required(
                     CONF_MJPEG_FPS,
-                    default=current_data.get(
+                    default=self._current_option(
                         CONF_MJPEG_FPS, DEFAULT_CAMERA_MJPEG_FPS
                     ),
                 ): fps_field,
@@ -953,7 +917,7 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
             errors=errors,
         )
 
-    async def _async_after_camera_step(self) -> FlowResult:
+    async def _async_after_camera_step(self) -> ConfigFlowResult:
         """Continue the options flow after the (optional) camera step."""
         relay_count = self._data.get(CONF_RELAY_COUNT, DEFAULT_RELAY_COUNT)
         if relay_count > 0:
@@ -965,15 +929,14 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_relay(
         self, user_input: dict[str, Any] | None = None, relay_index: int = 0
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Collect relay name/number/device-type for one relay (options flow).
 
         Mirrors the initial config flow's split: device-type lives here so the
         follow-up pulse step can pick the right default for door vs gate.
         """
-        errors = {}
-        current_data = self._merged_data()
-        existing_relays = current_data.get(CONF_RELAYS, [])
+        errors: dict[str, str] = {}
+        existing_relays = self._current_option(CONF_RELAYS, [])
 
         if user_input is not None:
             self._pending_relay = user_input
@@ -1018,12 +981,11 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_relay_pulse(
         self, user_input: dict[str, Any] | None = None, relay_index: int = 0
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Collect pulse duration with the right default for door vs gate."""
-        errors = {}
-        current_data = self._merged_data()
+        errors: dict[str, str] = {}
         relay_count = self._data.get(CONF_RELAY_COUNT, DEFAULT_RELAY_COUNT)
-        existing_relays = current_data.get(CONF_RELAYS, [])
+        existing_relays = self._current_option(CONF_RELAYS, [])
         pending = self._pending_relay or {}
         device_type = pending.get(CONF_RELAY_DEVICE_TYPE, DEVICE_TYPE_DOOR)
 
@@ -1075,6 +1037,6 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
             },
         )
 
-    async def _async_create_entry(self) -> FlowResult:
+    async def _async_create_entry(self) -> ConfigFlowResult:
         """Create the options entry."""
         return self.async_create_entry(title="", data=self._data)

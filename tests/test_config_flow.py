@@ -45,9 +45,10 @@ def _install_voluptuous_stub() -> None:
             self.schema = schema
 
     class Required:
-        def __init__(self, key, default=None):
+        def __init__(self, key, default=None, description=None):
             self.key = key
             self.default = default
+            self.description = description
 
         def __hash__(self) -> int:
             return hash(("required", self.key))
@@ -139,11 +140,12 @@ def _install_homeassistant_stubs() -> None:
             super().__init_subclass__(**kwargs)
 
     class OptionsFlow(_BaseFlow):
-        pass
+        config_entry = None
 
     config_entries.ConfigFlow = ConfigFlow
     config_entries.OptionsFlow = OptionsFlow
     config_entries.ConfigEntry = object
+    config_entries.ConfigFlowResult = dict
     sys.modules["homeassistant.config_entries"] = config_entries
 
     helpers = ensure_package("homeassistant.helpers")
@@ -154,17 +156,40 @@ def _install_homeassistant_stubs() -> None:
             self.config = config
 
     class SelectSelectorConfig:
-        def __init__(self, *, options, mode, custom_value=False):
+        def __init__(self, *, options, mode, custom_value=False, translation_key=None):
             self.options = options
             self.mode = mode
             self.custom_value = custom_value
+            self.translation_key = translation_key
 
     class SelectSelectorMode:
         DROPDOWN = "dropdown"
 
+    class NumberSelector:
+        def __init__(self, config):
+            self.config = config
+
+    class NumberSelectorConfig:
+        def __init__(self, *, min=0, max=100, step=1, mode="box", unit_of_measurement=None):
+            self.min = min
+            self.max = max
+            self.step = step
+            self.mode = mode
+            self.unit_of_measurement = unit_of_measurement
+
+    class NumberSelectorMode:
+        BOX = "box"
+
+    def SelectOptionDict(*, label: str, value: str) -> dict[str, str]:
+        return {"label": label, "value": value}
+
     selector_module.SelectSelector = SelectSelector
     selector_module.SelectSelectorConfig = SelectSelectorConfig
     selector_module.SelectSelectorMode = SelectSelectorMode
+    selector_module.SelectOptionDict = SelectOptionDict
+    selector_module.NumberSelector = NumberSelector
+    selector_module.NumberSelectorConfig = NumberSelectorConfig
+    selector_module.NumberSelectorMode = NumberSelectorMode
     sys.modules["homeassistant.helpers.selector"] = selector_module
 
     cv_module = types.ModuleType("homeassistant.helpers.config_validation")
@@ -196,8 +221,8 @@ def load_config_flow_module():
 class FakeAPI:
     """In-memory replacement for ``TwoNIntercomAPI``.
 
-    The flow only calls ``async_test_connection``, ``async_get_directory``,
-    and ``async_close`` during these tests, so we keep the surface tiny.
+    The flow calls ``async_test_connection``, ``async_get_system_info``,
+    ``async_get_directory``, and ``async_close``.
     """
 
     instances: list["FakeAPI"] = []
@@ -224,6 +249,9 @@ class FakeAPI:
     async def async_test_connection(self) -> bool:
         return FakeAPI.connection_result
 
+    async def async_get_system_info(self) -> dict:
+        return FakeAPI.system_info
+
     async def async_get_directory(self):
         return []
 
@@ -232,13 +260,15 @@ class FakeAPI:
 
 
 FakeAPI.connection_result = True
+FakeAPI.system_info = {"serialNumber": "SN-123456", "macAddr": "00:11:22:33:44:55"}
 
 
 class FakeConfigEntry:
-    def __init__(self, entry_id, data, options=None) -> None:
+    def __init__(self, entry_id, data, options=None, domain="2n_intercom") -> None:
         self.entry_id = entry_id
         self.data = data
         self.options = options or {}
+        self.domain = domain
 
 
 class FakeConfigEntries:
@@ -249,6 +279,12 @@ class FakeConfigEntries:
 
     def async_get_entry(self, entry_id):
         return self._entries.get(entry_id)
+
+    def async_entries(self, domain=None):
+        entries = list(self._entries.values())
+        if domain is not None:
+            entries = [e for e in entries if getattr(e, "domain", None) == domain]
+        return entries
 
     def async_update_entry(self, entry, *, data=None, **_kwargs):
         if data is not None:
@@ -491,6 +527,772 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["errors"], {"base": "cannot_connect"})
         self.assertEqual(hass.config_entries.update_calls, [])
         self.assertEqual(hass.config_entries.reload_calls, [])
+
+    # --- Device step tests ---
+
+    async def test_device_step_no_relays_creates_entry(self) -> None:
+        flow = self._make_flow()
+        flow._data = {
+            "host": "192.0.2.20",
+            "port": 443,
+            "protocol": "https",
+            "username": "user",
+            "password": "pass",
+            "verify_ssl": False,
+            "serial_number": "SN-123456",
+        }
+        result = await flow.async_step_device(
+            {
+                "name": "My Intercom",
+                "enable_camera": True,
+                "enable_doorbell": True,
+                "relay_count": 0,
+                "called_id": "__all__",
+            }
+        )
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["title"], "My Intercom")
+
+    async def test_device_step_with_relays_advances_to_relay(self) -> None:
+        flow = self._make_flow()
+        flow._data = {
+            "host": "192.0.2.20",
+            "port": 443,
+            "protocol": "https",
+            "username": "user",
+            "password": "pass",
+            "verify_ssl": False,
+        }
+        result = await flow.async_step_device(
+            {
+                "name": "Intercom",
+                "enable_camera": True,
+                "enable_doorbell": True,
+                "relay_count": 1,
+            }
+        )
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "relay")
+
+    async def test_device_step_renders_form_when_no_input(self) -> None:
+        flow = self._make_flow()
+        flow._data = {
+            "host": "192.0.2.20",
+            "port": 443,
+            "username": "user",
+            "password": "pass",
+        }
+        result = await flow.async_step_device(None)
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "device")
+
+    # --- Relay step tests ---
+
+    async def test_relay_step_advances_to_relay_pulse(self) -> None:
+        flow = self._make_flow()
+        flow._data = {"relay_count": 1}
+        flow._relays = []
+        result = await flow.async_step_relay(
+            {"relay_name": "Front Door", "relay_number": 1, "relay_device_type": "door"},
+            relay_index=0,
+        )
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "relay_pulse")
+
+    async def test_relay_pulse_step_creates_entry_for_single_relay(self) -> None:
+        flow = self._make_flow()
+        flow._data = {
+            "host": "192.0.2.20",
+            "port": 443,
+            "protocol": "https",
+            "username": "user",
+            "password": "pass",
+            "verify_ssl": False,
+            "relay_count": 1,
+            "serial_number": "SN-123",
+        }
+        flow._relays = []
+        flow._pending_relay = {
+            "relay_name": "Door",
+            "relay_number": 1,
+            "relay_device_type": "door",
+        }
+        result = await flow.async_step_relay_pulse(
+            {"relay_pulse_duration": 2000}, relay_index=0
+        )
+        self.assertEqual(result["type"], "create_entry")
+
+    async def test_relay_pulse_step_advances_to_next_relay_when_more(self) -> None:
+        flow = self._make_flow()
+        flow._data = {"relay_count": 2}
+        flow._relays = []
+        flow._pending_relay = {
+            "relay_name": "Door",
+            "relay_number": 1,
+            "relay_device_type": "door",
+        }
+        result = await flow.async_step_relay_pulse(
+            {"relay_pulse_duration": 2000}, relay_index=0
+        )
+        # Should advance to relay step for relay_index=1
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "relay")
+
+    async def test_relay_renders_form_when_no_input(self) -> None:
+        flow = self._make_flow()
+        flow._data = {"relay_count": 1}
+        flow._relays = []
+        result = await flow.async_step_relay(None, relay_index=0)
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "relay")
+        self.assertEqual(result["description_placeholders"]["relay_number"], "1")
+
+    async def test_relay_pulse_renders_form_when_no_input(self) -> None:
+        flow = self._make_flow()
+        flow._data = {"relay_count": 1}
+        flow._relays = []
+        flow._pending_relay = {
+            "relay_name": "Gate",
+            "relay_number": 2,
+            "relay_device_type": "gate",
+        }
+        result = await flow.async_step_relay_pulse(None, relay_index=0)
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "relay_pulse")
+
+    # --- Unique ID uses serial ---
+
+    async def test_unique_id_uses_serial_number(self) -> None:
+        FakeAPI.system_info = {"serialNumber": "SERIAL-ABC"}
+        flow = self._make_flow()
+        await flow.async_step_user(
+            {
+                "host": "192.0.2.20",
+                "port": 443,
+                "protocol": "https",
+                "username": "user",
+                "password": "pass",
+                "verify_ssl": False,
+            }
+        )
+        self.assertEqual(flow._data.get("serial_number"), "SERIAL-ABC")
+
+    async def test_unique_id_falls_back_to_mac(self) -> None:
+        FakeAPI.system_info = {"macAddr": "AA:BB:CC:DD:EE:FF"}
+        flow = self._make_flow()
+        await flow.async_step_user(
+            {
+                "host": "192.0.2.20",
+                "port": 443,
+                "protocol": "https",
+                "username": "user",
+                "password": "pass",
+                "verify_ssl": False,
+            }
+        )
+        self.assertEqual(flow._data.get("serial_number"), "AA:BB:CC:DD:EE:FF")
+
+    async def test_unique_id_falls_back_to_host_when_no_serial(self) -> None:
+        FakeAPI.system_info = {}
+        flow = self._make_flow()
+        flow._data = {
+            "host": "192.0.2.20",
+            "port": 443,
+            "protocol": "https",
+            "username": "user",
+            "password": "pass",
+            "verify_ssl": False,
+        }
+        # Complete the device step to trigger _async_create_entry
+        result = await flow.async_step_device(
+            {
+                "name": "Intercom",
+                "enable_camera": False,
+                "enable_doorbell": False,
+                "relay_count": 0,
+            }
+        )
+        self.assertEqual(result["type"], "create_entry")
+        # The unique id should have been set; since no serial, it uses host
+        self.assertIsNotNone(flow._unique_id)
+
+    # --- User step edge cases ---
+
+    async def test_user_step_shows_form_when_no_input(self) -> None:
+        flow = self._make_flow()
+        result = await flow.async_step_user(None)
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "user")
+
+    async def test_user_step_exception_shows_connect_error(self) -> None:
+        """An exception during connection test should show cannot_connect."""
+        config_flow_mod = self.config_flow_module
+
+        class ExplodingAPI(FakeAPI):
+            async def async_test_connection(self):
+                raise RuntimeError("boom")
+
+        original = config_flow_mod.TwoNIntercomAPI
+        config_flow_mod.TwoNIntercomAPI = ExplodingAPI
+        try:
+            flow = self._make_flow()
+            result = await flow.async_step_user(
+                {
+                    "host": "192.0.2.20",
+                    "port": 443,
+                    "protocol": "https",
+                    "username": "user",
+                    "password": "pass",
+                    "verify_ssl": False,
+                }
+            )
+            self.assertEqual(result["type"], "form")
+            self.assertEqual(result["errors"], {"base": "cannot_connect"})
+        finally:
+            config_flow_mod.TwoNIntercomAPI = original
+
+    # --- Reauth reads only entry.data, not options ---
+
+    async def test_reauth_does_not_merge_options(self) -> None:
+        """Reauth should only use entry.data, not entry.options."""
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                "host": "192.0.2.20",
+                "port": 443,
+                "protocol": "https",
+                "username": "homeassistant",
+                "password": "old",
+                "verify_ssl": False,
+            },
+            options={"host": "stale-option-host"},
+        )
+        hass = FakeHass([entry])
+        flow = self._make_flow(hass)
+        flow.context = {"entry_id": entry.entry_id}
+
+        await flow.async_step_reauth(entry.data)
+        # The flow's _data should come from entry.data, not merged with options
+        self.assertEqual(flow._data["host"], "192.0.2.20")
+
+    # --- Duplicate detection tests ---
+
+    async def test_duplicate_host_aborts_even_with_different_unique_id(self) -> None:
+        """Adding a device with the same host as an existing entry should abort.
+
+        This catches the case where an old entry uses a host-based unique_id
+        and a new entry would get a serial-based unique_id.
+        """
+        existing = FakeConfigEntry(
+            "old-entry",
+            {"host": "192.0.2.20", "name": "IP Verso"},
+        )
+        hass = FakeHass([existing])
+        flow = self._make_flow(hass)
+        flow._data = {
+            "host": "192.0.2.20",
+            "port": 443,
+            "protocol": "https",
+            "username": "user",
+            "password": "pass",
+            "verify_ssl": False,
+            "serial_number": "SN-NEW-SERIAL",
+        }
+        result = await flow.async_step_device(
+            {
+                "name": "My Intercom",
+                "enable_camera": True,
+                "enable_doorbell": True,
+                "relay_count": 0,
+                "called_id": "__all__",
+            }
+        )
+        self.assertEqual(result["type"], "abort")
+        self.assertEqual(result["reason"], "already_configured")
+
+    async def test_duplicate_serial_aborts_even_with_different_host(self) -> None:
+        """Adding a device with the same serial but different host should abort."""
+        existing = FakeConfigEntry(
+            "old-entry",
+            {"host": "192.0.2.99", "serial_number": "SN-123456"},
+        )
+        hass = FakeHass([existing])
+        flow = self._make_flow(hass)
+        flow._data = {
+            "host": "192.0.2.20",
+            "port": 443,
+            "protocol": "https",
+            "username": "user",
+            "password": "pass",
+            "verify_ssl": False,
+            "serial_number": "SN-123456",
+        }
+        result = await flow.async_step_device(
+            {
+                "name": "My Intercom",
+                "enable_camera": True,
+                "enable_doorbell": True,
+                "relay_count": 0,
+                "called_id": "__all__",
+            }
+        )
+        self.assertEqual(result["type"], "abort")
+        self.assertEqual(result["reason"], "already_configured")
+
+
+class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
+    """Tests for the options flow."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.config_flow_module = load_config_flow_module()
+        cls.config_flow_module.TwoNIntercomAPI = FakeAPI
+
+    def setUp(self) -> None:
+        FakeAPI.instances = []
+        FakeAPI.connection_result = True
+        FakeAPI.system_info = {"serialNumber": "SN-123"}
+
+    def _make_options_flow(
+        self, entry: FakeConfigEntry, hass: FakeHass | None = None
+    ):
+        flow = self.config_flow_module.TwoNIntercomOptionsFlow(entry)
+        flow.config_entry = entry
+        flow.hass = hass or FakeHass([entry])
+        return flow
+
+    async def test_init_redirects_to_device_step(self) -> None:
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                "host": "192.0.2.20",
+                "port": 443,
+                "username": "user",
+                "password": "pass",
+            },
+        )
+        flow = self._make_options_flow(entry)
+        result = await flow.async_step_init(None)
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "device")
+
+    async def test_device_step_no_camera_no_relays_creates_entry(self) -> None:
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
+        )
+        flow = self._make_options_flow(entry)
+        result = await flow.async_step_device(
+            {
+                "name": "Updated",
+                "enable_camera": False,
+                "enable_doorbell": True,
+                "scan_interval": 10,
+                "relay_count": 0,
+                "door_type": "door",
+            }
+        )
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["name"], "Updated")
+        self.assertEqual(result["data"]["scan_interval"], 10)
+
+    async def test_device_step_with_camera_advances_to_camera(self) -> None:
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
+        )
+        flow = self._make_options_flow(entry)
+        result = await flow.async_step_device(
+            {
+                "name": "Intercom",
+                "enable_camera": True,
+                "enable_doorbell": True,
+                "scan_interval": 5,
+                "relay_count": 0,
+                "door_type": "door",
+            }
+        )
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "camera")
+
+    async def test_camera_step_no_relays_creates_entry(self) -> None:
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
+        )
+        flow = self._make_options_flow(entry)
+        flow._data = {
+            "name": "Intercom",
+            "enable_camera": True,
+            "relay_count": 0,
+        }
+        result = await flow.async_step_camera(
+            {
+                "live_view_mode": "auto",
+                "camera_source": "internal",
+                "mjpeg_width": 640,
+                "mjpeg_height": 480,
+                "mjpeg_fps": 5,
+            }
+        )
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(result["data"]["live_view_mode"], "auto")
+        self.assertEqual(result["data"]["mjpeg_width"], 640)
+
+    async def test_camera_step_coerces_floats_to_ints(self) -> None:
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
+        )
+        flow = self._make_options_flow(entry)
+        flow._data = {"relay_count": 0}
+        result = await flow.async_step_camera(
+            {
+                "live_view_mode": "mjpeg",
+                "camera_source": "internal",
+                "mjpeg_width": 640.0,
+                "mjpeg_height": 480.0,
+                "mjpeg_fps": 10.0,
+            }
+        )
+        self.assertEqual(result["type"], "create_entry")
+        self.assertIsInstance(result["data"]["mjpeg_width"], int)
+        self.assertIsInstance(result["data"]["mjpeg_fps"], int)
+
+    async def test_camera_step_renders_form_when_no_input(self) -> None:
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
+        )
+        flow = self._make_options_flow(entry)
+        flow._data = {}
+        result = await flow.async_step_camera(None)
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "camera")
+
+    async def test_device_step_with_relays_advances_to_relay(self) -> None:
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
+        )
+        flow = self._make_options_flow(entry)
+        result = await flow.async_step_device(
+            {
+                "name": "Intercom",
+                "enable_camera": False,
+                "enable_doorbell": True,
+                "scan_interval": 5,
+                "relay_count": 1,
+                "door_type": "door",
+            }
+        )
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "relay")
+
+    async def test_options_relay_to_pulse_to_entry(self) -> None:
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
+        )
+        flow = self._make_options_flow(entry)
+        flow._data = {"relay_count": 1, "enable_camera": False}
+        flow._relays = []
+
+        # Relay step
+        result = await flow.async_step_relay(
+            {"relay_name": "Door", "relay_number": 1, "relay_device_type": "door"},
+            relay_index=0,
+        )
+        self.assertEqual(result["step_id"], "relay_pulse")
+
+        # Pulse step
+        result = await flow.async_step_relay_pulse(
+            {"relay_pulse_duration": 3000}, relay_index=0
+        )
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(len(result["data"]["relays"]), 1)
+        self.assertEqual(result["data"]["relays"][0]["relay_pulse_duration"], 3000)
+
+    async def test_options_relay_renders_form(self) -> None:
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
+        )
+        flow = self._make_options_flow(entry)
+        flow._data = {"relay_count": 1}
+        flow._relays = []
+        result = await flow.async_step_relay(None, relay_index=0)
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "relay")
+
+    async def test_options_relay_pulse_renders_form(self) -> None:
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
+        )
+        flow = self._make_options_flow(entry)
+        flow._data = {"relay_count": 1}
+        flow._relays = []
+        flow._pending_relay = {
+            "relay_name": "Gate",
+            "relay_number": 1,
+            "relay_device_type": "gate",
+        }
+        result = await flow.async_step_relay_pulse(None, relay_index=0)
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "relay_pulse")
+
+    async def test_options_multiple_relays(self) -> None:
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
+        )
+        flow = self._make_options_flow(entry)
+        flow._data = {"relay_count": 2, "enable_camera": False}
+        flow._relays = []
+
+        # First relay
+        await flow.async_step_relay(
+            {"relay_name": "Door", "relay_number": 1, "relay_device_type": "door"},
+            relay_index=0,
+        )
+        result = await flow.async_step_relay_pulse(
+            {"relay_pulse_duration": 2000}, relay_index=0
+        )
+        # Should advance to next relay
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "relay")
+
+        # Second relay
+        await flow.async_step_relay(
+            {"relay_name": "Gate", "relay_number": 2, "relay_device_type": "gate"},
+            relay_index=1,
+        )
+        result = await flow.async_step_relay_pulse(
+            {"relay_pulse_duration": 15000}, relay_index=1
+        )
+        self.assertEqual(result["type"], "create_entry")
+        self.assertEqual(len(result["data"]["relays"]), 2)
+
+    async def test_scan_interval_coerced_to_int(self) -> None:
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
+        )
+        flow = self._make_options_flow(entry)
+        result = await flow.async_step_device(
+            {
+                "name": "I",
+                "enable_camera": False,
+                "enable_doorbell": False,
+                "scan_interval": 10.0,  # NumberSelector returns float
+                "relay_count": 0,
+                "door_type": "door",
+            }
+        )
+        self.assertEqual(result["type"], "create_entry")
+        self.assertIsInstance(result["data"]["scan_interval"], int)
+
+    async def test_options_does_not_store_connection_settings(self) -> None:
+        """Options flow output must not contain connection fields."""
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
+        )
+        flow = self._make_options_flow(entry)
+        result = await flow.async_step_device(
+            {
+                "name": "Updated",
+                "enable_camera": False,
+                "enable_doorbell": True,
+                "scan_interval": 5,
+                "relay_count": 0,
+                "door_type": "door",
+            }
+        )
+        self.assertEqual(result["type"], "create_entry")
+        # Options should not contain connection fields
+        self.assertNotIn("host", result["data"])
+        self.assertNotIn("port", result["data"])
+        self.assertNotIn("username", result["data"])
+        self.assertNotIn("password", result["data"])
+
+    async def test_device_step_defaults_from_options(self) -> None:
+        """Device step should show current options as defaults."""
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
+            options={"name": "Custom Name", "scan_interval": 15},
+        )
+        flow = self._make_options_flow(entry)
+        result = await flow.async_step_device(None)
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "device")
+
+
+class ConfigFlowHelperTests(unittest.IsolatedAsyncioTestCase):
+    """Tests for config_flow helper functions."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.config_flow_module = load_config_flow_module()
+
+    def test_all_calls_label_english(self) -> None:
+        self.assertEqual(self.config_flow_module._all_calls_label("en"), "All calls")
+
+    def test_all_calls_label_czech(self) -> None:
+        self.assertEqual(self.config_flow_module._all_calls_label("cs"), "Vsechny hovory")
+
+    async def test_async_get_called_peers_empty_on_failure(self) -> None:
+        result = await self.config_flow_module._async_get_called_peers({
+            "host": "192.0.2.99",
+            "port": 443,
+            "protocol": "https",
+        })
+        self.assertEqual(result, [])
+
+    async def test_async_get_called_peers_with_dict_result(self) -> None:
+        """Test _async_get_called_peers with a directory that returns users."""
+        # We need to patch TwoNIntercomAPI to return test data
+        original_api = self.config_flow_module.TwoNIntercomAPI
+
+        class FakeAPI:
+            def __init__(self, **kwargs):
+                pass
+
+            async def async_get_directory(self):
+                return [
+                    {
+                        "name": "John",
+                        "callPos": [{"peer": "sip:100@device"}],
+                    }
+                ]
+
+            async def async_close(self):
+                pass
+
+        self.config_flow_module.TwoNIntercomAPI = FakeAPI
+        try:
+            result = await self.config_flow_module._async_get_called_peers({
+                "host": "192.0.2.20",
+                "port": 443,
+                "protocol": "https",
+            })
+            self.assertEqual(result, ["sip:100@device"])
+        finally:
+            self.config_flow_module.TwoNIntercomAPI = original_api
+
+    async def test_async_get_called_peers_dict_directory_with_users(self) -> None:
+        """When directory returns a dict with 'users' key."""
+        original_api = self.config_flow_module.TwoNIntercomAPI
+
+        class FakeAPI:
+            def __init__(self, **kwargs):
+                pass
+
+            async def async_get_directory(self):
+                return {
+                    "users": [
+                        {"name": "Jane", "callPos": [{"peer": "sip:200@device"}]}
+                    ]
+                }
+
+            async def async_close(self):
+                pass
+
+        self.config_flow_module.TwoNIntercomAPI = FakeAPI
+        try:
+            result = await self.config_flow_module._async_get_called_peers({
+                "host": "192.0.2.20",
+            })
+            self.assertEqual(result, ["sip:200@device"])
+        finally:
+            self.config_flow_module.TwoNIntercomAPI = original_api
+
+    async def test_async_get_called_peers_dict_directory_with_result(self) -> None:
+        """When directory returns a dict with 'result' key containing users."""
+        original_api = self.config_flow_module.TwoNIntercomAPI
+
+        class FakeAPI:
+            def __init__(self, **kwargs):
+                pass
+
+            async def async_get_directory(self):
+                return {
+                    "result": {
+                        "users": [
+                            {"name": "Bob", "callPos": [{"peer": "sip:300@device"}]}
+                        ]
+                    }
+                }
+
+            async def async_close(self):
+                pass
+
+        self.config_flow_module.TwoNIntercomAPI = FakeAPI
+        try:
+            result = await self.config_flow_module._async_get_called_peers({
+                "host": "192.0.2.20",
+            })
+            self.assertEqual(result, ["sip:300@device"])
+        finally:
+            self.config_flow_module.TwoNIntercomAPI = original_api
+
+    async def test_async_get_called_peers_dict_directory_result_list(self) -> None:
+        """When directory result is a list."""
+        original_api = self.config_flow_module.TwoNIntercomAPI
+
+        class FakeAPI:
+            def __init__(self, **kwargs):
+                pass
+
+            async def async_get_directory(self):
+                return {
+                    "result": [
+                        {"name": "Alice", "callPos": [{"peer": "sip:400@device"}]}
+                    ]
+                }
+
+            async def async_close(self):
+                pass
+
+        self.config_flow_module.TwoNIntercomAPI = FakeAPI
+        try:
+            result = await self.config_flow_module._async_get_called_peers({
+                "host": "192.0.2.20",
+            })
+            self.assertEqual(result, ["sip:400@device"])
+        finally:
+            self.config_flow_module.TwoNIntercomAPI = original_api
+
+    async def test_async_get_called_peers_list_with_users_key(self) -> None:
+        """When directory returns list entries containing 'users' key."""
+        original_api = self.config_flow_module.TwoNIntercomAPI
+
+        class FakeAPI:
+            def __init__(self, **kwargs):
+                pass
+
+            async def async_get_directory(self):
+                return [
+                    {
+                        "users": [
+                            {"name": "Dave", "callPos": [{"peer": "sip:500@device"}]}
+                        ]
+                    }
+                ]
+
+            async def async_close(self):
+                pass
+
+        self.config_flow_module.TwoNIntercomAPI = FakeAPI
+        try:
+            result = await self.config_flow_module._async_get_called_peers({
+                "host": "192.0.2.20",
+            })
+            self.assertEqual(result, ["sip:500@device"])
+        finally:
+            self.config_flow_module.TwoNIntercomAPI = original_api
 
 
 if __name__ == "__main__":
