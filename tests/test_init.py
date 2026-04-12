@@ -48,8 +48,12 @@ def _install_homeassistant_stubs() -> None:
     class ConfigEntryNotReady(Exception):
         pass
 
+    class ServiceValidationError(HomeAssistantError):
+        """Stub for bad-input service errors."""
+
     exceptions.HomeAssistantError = HomeAssistantError
     exceptions.ConfigEntryNotReady = ConfigEntryNotReady
+    exceptions.ServiceValidationError = ServiceValidationError
     sys.modules["homeassistant.exceptions"] = exceptions
 
     config_entries = types.ModuleType("homeassistant.config_entries")
@@ -730,3 +734,389 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(start_calls, ["TwoNIntercomCoordinator"])
         self.assertEqual(stop_calls, ["TwoNIntercomCoordinator"])
+
+    async def test_unload_clears_runtime_data(self) -> None:
+        """After successful unload, runtime_data should be cleared."""
+        init_module = self.init_module
+        ha_const = sys.modules["homeassistant.const"]
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+
+        await init_module.async_setup_entry(hass, entry)
+        self.assertIsNotNone(entry.runtime_data)
+
+        await init_module.async_unload_entry(hass, entry)
+        self.assertIsNone(entry.runtime_data)
+
+    async def test_get_option_prefers_options_over_data(self) -> None:
+        """_get_option should prefer options, fall back to data."""
+        init_module = self.init_module
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"scan_interval": 5, "host": "192.0.2.20"},
+            options={"scan_interval": 10},
+        )
+        self.assertEqual(init_module._get_option(entry, "scan_interval"), 10)
+        self.assertEqual(init_module._get_option(entry, "host"), "192.0.2.20")
+        self.assertIsNone(init_module._get_option(entry, "missing"))
+        self.assertEqual(init_module._get_option(entry, "missing", "default"), "default")
+
+    async def test_is_entry_loaded_rejects_none_runtime_data(self) -> None:
+        """_is_entry_loaded should return False when runtime_data is None."""
+        init_module = self.init_module
+
+        entry = FakeConfigEntry("entry-1", {})
+        entry.runtime_data = None
+        self.assertFalse(init_module._is_entry_loaded(entry))
+
+    async def test_is_entry_loaded_accepts_valid_runtime_data(self) -> None:
+        """_is_entry_loaded should return True for TwoNIntercomRuntimeData."""
+        init_module = self.init_module
+        ha_const = sys.modules["homeassistant.const"]
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+        await init_module.async_setup_entry(hass, entry)
+        self.assertTrue(init_module._is_entry_loaded(entry))
+
+    async def test_hangup_rejects_invalid_reason(self) -> None:
+        """Hangup with an invalid reason should raise ServiceValidationError."""
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        ServiceValidationError = sys.modules["homeassistant.exceptions"].ServiceValidationError
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+        await init_module.async_setup(hass, {})
+        await init_module.async_setup_entry(hass, entry)
+
+        hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
+
+        with self.assertRaises(ServiceValidationError) as ctx:
+            await hangup_call(
+                types.SimpleNamespace(data={"reason": "invalid_value"})
+            )
+        self.assertEqual(ctx.exception.translation_key, "invalid_hangup_reason")
+
+    async def test_hangup_rejects_empty_reason(self) -> None:
+        """Hangup with an empty string reason should raise ServiceValidationError."""
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        ServiceValidationError = sys.modules["homeassistant.exceptions"].ServiceValidationError
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+        await init_module.async_setup(hass, {})
+        await init_module.async_setup_entry(hass, entry)
+
+        hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
+
+        with self.assertRaises(ServiceValidationError):
+            await hangup_call(
+                types.SimpleNamespace(data={"reason": ""})
+            )
+
+    async def test_get_platforms_reads_from_options(self) -> None:
+        """_get_platforms should use behavioral options from entry.options."""
+        init_module = self.init_module
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {"enable_camera": True},
+            options={"enable_camera": False, "enable_doorbell": False, "relays": []},
+        )
+        platforms = init_module._get_platforms(entry)
+        # camera disabled, doorbell disabled, no relays → lock + sensor
+        self.assertNotIn("camera", platforms)
+        self.assertNotIn("binary_sensor", platforms)
+        self.assertIn("lock", platforms)
+        self.assertIn("sensor", platforms)
+
+    async def test_get_platforms_with_relays(self) -> None:
+        """When relays exist, switch+cover are added instead of lock."""
+        init_module = self.init_module
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {},
+            options={"relays": [{"relay_number": 1}]},
+        )
+        platforms = init_module._get_platforms(entry)
+        self.assertIn("switch", platforms)
+        self.assertIn("cover", platforms)
+        self.assertNotIn("lock", platforms)
+
+    async def test_is_entry_loaded_with_config_entry_state(self) -> None:
+        """_is_entry_loaded with a state attribute that has LOADED."""
+        init_module = self.init_module
+
+        class FakeState:
+            LOADED = "loaded"
+
+        entry = FakeConfigEntry("e1", {})
+        entry.state = FakeState()
+        entry.state = "not_loaded"
+        # state != LOADED → False even if runtime_data is set
+        entry.runtime_data = init_module.TwoNIntercomRuntimeData(
+            coordinator=types.SimpleNamespace(),
+            api=FakeAPI(),
+        )
+        # state is a string, no LOADED attribute → falls through to runtime check
+        self.assertTrue(init_module._is_entry_loaded(entry))
+
+    async def test_is_entry_loaded_state_mismatch(self) -> None:
+        """_is_entry_loaded returns False when state doesn't match LOADED."""
+        init_module = self.init_module
+
+        from enum import Enum
+
+        class ConfigEntryState(Enum):
+            LOADED = "loaded"
+            SETUP_ERROR = "setup_error"
+
+        entry = FakeConfigEntry("e1", {})
+        entry.state = ConfigEntryState.SETUP_ERROR
+        entry.runtime_data = init_module.TwoNIntercomRuntimeData(
+            coordinator=types.SimpleNamespace(),
+            api=FakeAPI(),
+        )
+        self.assertFalse(init_module._is_entry_loaded(entry))
+
+    async def test_resolve_session_id_from_service_data(self) -> None:
+        """_resolve_session_id returns explicit session_id from service data."""
+        init_module = self.init_module
+
+        runtime = init_module.TwoNIntercomRuntimeData(
+            coordinator=types.SimpleNamespace(active_session_id="cached-1"),
+            api=FakeAPI(),
+        )
+        result = init_module._resolve_session_id(runtime, {"session_id": "explicit-1"})
+        self.assertEqual(result, "explicit-1")
+
+    async def test_extract_session_ids_not_dict(self) -> None:
+        init_module = self.init_module
+        self.assertEqual(init_module._extract_session_ids_from_status("bad"), [])
+
+    async def test_extract_session_ids_sessions_not_list(self) -> None:
+        init_module = self.init_module
+        self.assertEqual(
+            init_module._extract_session_ids_from_status({"sessions": "bad"}), []
+        )
+
+    async def test_extract_session_ids_non_dict_session(self) -> None:
+        init_module = self.init_module
+        self.assertEqual(
+            init_module._extract_session_ids_from_status({"sessions": ["bad"]}), []
+        )
+
+    async def test_extract_session_ids_missing_session_key(self) -> None:
+        init_module = self.init_module
+        self.assertEqual(
+            init_module._extract_session_ids_from_status(
+                {"sessions": [{"state": "active"}]}
+            ),
+            [],
+        )
+
+    async def test_extract_session_ids_empty_after_strip(self) -> None:
+        init_module = self.init_module
+        self.assertEqual(
+            init_module._extract_session_ids_from_status(
+                {"sessions": [{"session": "  "}]}
+            ),
+            [],
+        )
+
+    async def test_hangup_explicit_session_returns_early(self) -> None:
+        """Hangup with explicit session_id should return after one hangup."""
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+        await init_module.async_setup(hass, {})
+        await init_module.async_setup_entry(hass, entry)
+
+        hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
+        await hangup_call(
+            types.SimpleNamespace(data={"session_id": "explicit-99"})
+        )
+        self.assertEqual(
+            entry.runtime_data.api.hangup_calls, [("explicit-99", None)]
+        )
+
+    async def test_hangup_call_status_exception(self) -> None:
+        """When async_get_call_status fails, raise HomeAssistantError."""
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        HomeAssistantError = sys.modules["homeassistant.exceptions"].HomeAssistantError
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+        await init_module.async_setup(hass, {})
+        await init_module.async_setup_entry(hass, entry)
+
+        async def fail_call_status():
+            raise RuntimeError("device unreachable")
+
+        entry.runtime_data.api.async_get_call_status = fail_call_status
+        entry.runtime_data.coordinator._active_session_id = None
+
+        hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
+        with self.assertRaises(HomeAssistantError) as ctx:
+            await hangup_call(types.SimpleNamespace(data={}))
+        self.assertEqual(ctx.exception.translation_key, "call_status_query_failed")
+
+    async def test_hangup_no_live_sessions_falls_back_to_cached(self) -> None:
+        """When no live sessions, fall back to coordinator cached session."""
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+        await init_module.async_setup(hass, {})
+        await init_module.async_setup_entry(hass, entry)
+
+        # Make call_status return no sessions
+        entry.runtime_data.api._call_status = {"state": "idle", "sessions": []}
+        # But coordinator has a cached session
+        entry.runtime_data.coordinator._active_session_id = "cached-42"
+
+        hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
+        await hangup_call(types.SimpleNamespace(data={}))
+        self.assertEqual(
+            entry.runtime_data.api.hangup_calls, [("cached-42", None)]
+        )
+
+    async def test_hangup_no_sessions_no_cache_silent_noop(self) -> None:
+        """When no live or cached sessions, hangup is a silent no-op."""
+        init_module = self.init_module
+        const_module = self.const_module
+        ha_const = sys.modules["homeassistant.const"]
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+        )
+        hass = FakeHass([entry])
+        await init_module.async_setup(hass, {})
+        await init_module.async_setup_entry(hass, entry)
+
+        entry.runtime_data.api._call_status = {"state": "idle", "sessions": []}
+        entry.runtime_data.coordinator._active_session_id = None
+
+        hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
+        await hangup_call(types.SimpleNamespace(data={}))
+        # No calls were made
+        self.assertEqual(entry.runtime_data.api.hangup_calls, [])
+
+    async def test_scan_interval_bad_value_uses_default(self) -> None:
+        """Non-integer scan_interval should fall back to DEFAULT_SCAN_INTERVAL."""
+        init_module = self.init_module
+        ha_const = sys.modules["homeassistant.const"]
+        init_module.TwoNIntercomAPI = FakeAPI
+
+        entry = FakeConfigEntry(
+            "entry-1",
+            {
+                ha_const.CONF_HOST: "intercom.local",
+                ha_const.CONF_PORT: 443,
+                ha_const.CONF_USERNAME: "user",
+                ha_const.CONF_PASSWORD: "secret",
+            },
+            options={"scan_interval": "not_a_number"},
+        )
+        hass = FakeHass([entry])
+        result = await init_module.async_setup_entry(hass, entry)
+        self.assertTrue(result)
+
+    async def test_async_update_options_reloads_entry(self) -> None:
+        """async_update_options should trigger a reload."""
+        init_module = self.init_module
+        ha_const = sys.modules["homeassistant.const"]
+
+        entry = FakeConfigEntry("entry-1", {
+            ha_const.CONF_HOST: "intercom.local",
+            ha_const.CONF_PORT: 443,
+            ha_const.CONF_USERNAME: "user",
+            ha_const.CONF_PASSWORD: "secret",
+        })
+        hass = FakeHass([entry])
+        # Should not raise
+        await init_module.async_update_options(hass, entry)

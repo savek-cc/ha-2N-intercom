@@ -172,7 +172,7 @@ class DiagnosticSensorTests(unittest.IsolatedAsyncioTestCase):
             FakeConfigEntry("entry-1", {"name": "Front Door"}),
         )
 
-        self.assertEqual(entity.state, "registered")
+        self.assertEqual(entity.native_value, "registered")
         self.assertEqual(entity.extra_state_attributes["registered_accounts"], 1)
 
     def test_call_state_sensor_uses_call_state_and_active_session(self) -> None:
@@ -186,10 +186,77 @@ class DiagnosticSensorTests(unittest.IsolatedAsyncioTestCase):
             FakeConfigEntry("entry-1", {"name": "Front Door"}),
         )
 
-        self.assertEqual(entity.state, "connected")
+        self.assertEqual(entity.native_value, "connected")
         self.assertEqual(
             entity.extra_state_attributes["active_session_id"], "session-123"
         )
+
+
+    def test_sip_registration_unknown_when_no_accounts(self) -> None:
+        sensor_module = self.sensor_module
+        coordinator = FakeCoordinator(phone_status={"accounts": []})
+        entity = sensor_module.TwoNIntercomSipRegistrationStatusSensor(
+            coordinator, FakeConfigEntry("e1", {"name": "Door"})
+        )
+        self.assertEqual(entity.native_value, "unknown")
+
+    def test_sip_registration_disabled_when_no_enabled_accounts(self) -> None:
+        sensor_module = self.sensor_module
+        coordinator = FakeCoordinator(
+            phone_status={
+                "accounts": [{"account": 1, "registrationEnabled": False}]
+            }
+        )
+        entity = sensor_module.TwoNIntercomSipRegistrationStatusSensor(
+            coordinator, FakeConfigEntry("e1", {"name": "Door"})
+        )
+        self.assertEqual(entity.native_value, "disabled")
+
+    def test_sip_registration_unregistered(self) -> None:
+        sensor_module = self.sensor_module
+        coordinator = FakeCoordinator(
+            phone_status={
+                "accounts": [
+                    {"account": 1, "registrationEnabled": True, "registered": False}
+                ]
+            }
+        )
+        entity = sensor_module.TwoNIntercomSipRegistrationStatusSensor(
+            coordinator, FakeConfigEntry("e1", {"name": "Door"})
+        )
+        self.assertEqual(entity.native_value, "unregistered")
+
+    def test_call_state_active_when_session_but_no_state(self) -> None:
+        sensor_module = self.sensor_module
+        coordinator = FakeCoordinator(call_state=None, active_session_id="s1")
+        entity = sensor_module.TwoNIntercomCallStateSensor(
+            coordinator, FakeConfigEntry("e1", {"name": "Door"})
+        )
+        self.assertEqual(entity.native_value, "active")
+
+    def test_call_state_idle_when_no_state_no_session(self) -> None:
+        sensor_module = self.sensor_module
+        coordinator = FakeCoordinator(call_state=None, active_session_id=None)
+        entity = sensor_module.TwoNIntercomCallStateSensor(
+            coordinator, FakeConfigEntry("e1", {"name": "Door"})
+        )
+        self.assertEqual(entity.native_value, "idle")
+
+    def test_call_state_no_session_attr(self) -> None:
+        sensor_module = self.sensor_module
+        coordinator = FakeCoordinator(call_state=None, active_session_id=None)
+        entity = sensor_module.TwoNIntercomCallStateSensor(
+            coordinator, FakeConfigEntry("e1", {"name": "Door"})
+        )
+        self.assertEqual(entity.extra_state_attributes, {})
+
+    def test_diagnostic_sensor_disabled_by_default(self) -> None:
+        sensor_module = self.sensor_module
+        coordinator = FakeCoordinator()
+        entity = sensor_module.TwoNIntercomSipRegistrationStatusSensor(
+            coordinator, FakeConfigEntry("e1", {"name": "Door"})
+        )
+        self.assertFalse(entity._attr_entity_registry_enabled_default)
 
 
 if __name__ == "__main__":

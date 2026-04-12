@@ -144,3 +144,168 @@ class LockStatusDerivationTests(unittest.TestCase):
         )
 
         self.assertTrue(entity.is_locked)
+
+    def test_relay_one_present_true(self) -> None:
+        coordinator = types.SimpleNamespace(
+            switch_caps={"switches": [{"switch": 1}]},
+            switch_status={"switches": []},
+            last_update_success=True,
+            get_device_info=lambda eid, n: {},
+        )
+        entry = types.SimpleNamespace(entry_id="e1", data={}, options={})
+        lock = self.lock_module.TwoNIntercomLock(coordinator, entry, None)
+        self.assertTrue(lock._relay_one_present())
+
+    def test_relay_one_present_false_when_no_relay(self) -> None:
+        coordinator = types.SimpleNamespace(
+            switch_caps={"switches": [{"switch": 2}]},
+            switch_status={"switches": []},
+            last_update_success=True,
+            get_device_info=lambda eid, n: {},
+        )
+        entry = types.SimpleNamespace(entry_id="e1", data={}, options={})
+        lock = self.lock_module.TwoNIntercomLock(coordinator, entry, None)
+        self.assertFalse(lock._relay_one_present())
+
+    def test_relay_one_present_false_when_caps_empty(self) -> None:
+        coordinator = types.SimpleNamespace(
+            switch_caps={},
+            switch_status={"switches": []},
+            last_update_success=True,
+            get_device_info=lambda eid, n: {},
+        )
+        entry = types.SimpleNamespace(entry_id="e1", data={}, options={})
+        lock = self.lock_module.TwoNIntercomLock(coordinator, entry, None)
+        self.assertFalse(lock._relay_one_present())
+
+    def test_cached_is_locked_when_held_true(self) -> None:
+        entity = self._make_entity(
+            switch_status={
+                "switches": [{"switch": 1, "active": False, "held": True}]
+            },
+            optimistic=True,
+        )
+        self.assertFalse(entity.is_locked)
+
+    def test_cached_is_locked_returns_none_on_missing_status(self) -> None:
+        coordinator = types.SimpleNamespace(
+            switch_status={},
+            switch_caps={},
+            last_update_success=True,
+            get_device_info=lambda eid, n: {},
+        )
+        entry = types.SimpleNamespace(entry_id="e1", data={}, options={})
+        entity = self.lock_module.TwoNIntercomLock(coordinator, entry, None)
+        entity._attr_is_locked = True
+        # No switches in status, no relay in caps → falls back to optimistic
+        self.assertTrue(entity.is_locked)
+
+    def test_gate_door_type_sets_device_class(self) -> None:
+        coordinator = types.SimpleNamespace(
+            switch_status={"switches": []},
+            last_update_success=True,
+            get_device_info=lambda eid, n: {},
+        )
+        entry = types.SimpleNamespace(entry_id="e1", data={}, options={})
+        lock = self.lock_module.TwoNIntercomLock(coordinator, entry, "gate")
+        self.assertEqual(lock._attr_device_class, "gate")
+
+    def test_door_type_no_device_class(self) -> None:
+        coordinator = types.SimpleNamespace(
+            switch_status={"switches": []},
+            last_update_success=True,
+            get_device_info=lambda eid, n: {},
+        )
+        entry = types.SimpleNamespace(entry_id="e1", data={}, options={})
+        lock = self.lock_module.TwoNIntercomLock(coordinator, entry, "door")
+        self.assertFalse(hasattr(lock, "_attr_device_class"))
+
+
+class LockAsyncTests(unittest.IsolatedAsyncioTestCase):
+    """Async tests for lock operations."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.lock_module, cls.const_module = load_lock_module()
+
+    def _make_entity(self, relay_success: bool = True):
+        async def fake_trigger(relay, duration):
+            return relay_success
+
+        coordinator = types.SimpleNamespace(
+            switch_status={"switches": []},
+            switch_caps={"switches": [{"switch": 1}]},
+            last_update_success=True,
+            get_device_info=lambda eid, n: {},
+            async_trigger_relay=fake_trigger,
+        )
+        entry = types.SimpleNamespace(entry_id="e1", data={}, options={})
+        return self.lock_module.TwoNIntercomLock(coordinator, entry, None)
+
+    async def test_async_lock_sets_locked(self) -> None:
+        entity = self._make_entity()
+        entity._attr_is_locked = False
+        await entity.async_lock()
+        self.assertTrue(entity._attr_is_locked)
+
+    async def test_async_unlock_on_success(self) -> None:
+        entity = self._make_entity(relay_success=True)
+        await entity.async_unlock()
+        self.assertFalse(entity._attr_is_locked)
+
+    async def test_async_unlock_on_failure(self) -> None:
+        entity = self._make_entity(relay_success=False)
+        entity._attr_is_locked = True
+        await entity.async_unlock()
+        # Should stay locked on failure
+        self.assertTrue(entity._attr_is_locked)
+
+    async def test_async_open_delegates_to_unlock(self) -> None:
+        entity = self._make_entity(relay_success=True)
+        await entity.async_open()
+        self.assertFalse(entity._attr_is_locked)
+
+    async def test_setup_entry_creates_lock(self) -> None:
+        entities = []
+
+        def add_entities(ents, update_before_add):
+            entities.extend(ents)
+
+        coordinator = types.SimpleNamespace(
+            switch_status={"switches": []},
+            switch_caps={},
+            last_update_success=True,
+            get_device_info=lambda eid, n: {},
+        )
+        runtime = types.SimpleNamespace(coordinator=coordinator)
+        config_entry = types.SimpleNamespace(
+            entry_id="e1",
+            data={"door_type": "door"},
+            options={},
+            runtime_data=runtime,
+        )
+        await self.lock_module.async_setup_entry(None, config_entry, add_entities)
+        self.assertEqual(len(entities), 1)
+
+    async def test_setup_entry_derives_door_type_from_relays(self) -> None:
+        entities = []
+
+        def add_entities(ents, update_before_add):
+            entities.extend(ents)
+
+        coordinator = types.SimpleNamespace(
+            switch_status={"switches": []},
+            switch_caps={},
+            last_update_success=True,
+            get_device_info=lambda eid, n: {},
+        )
+        runtime = types.SimpleNamespace(coordinator=coordinator)
+        config_entry = types.SimpleNamespace(
+            entry_id="e1",
+            data={"relays": [{"relay_device_type": "gate"}]},
+            options={},
+            runtime_data=runtime,
+        )
+        await self.lock_module.async_setup_entry(None, config_entry, add_entities)
+        self.assertEqual(len(entities), 1)
+        self.assertEqual(entities[0]._attr_device_class, "gate")
