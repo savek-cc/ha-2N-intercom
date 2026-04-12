@@ -185,6 +185,8 @@ class CameraStreamSourceTests(unittest.IsolatedAsyncioTestCase):
             password="secret",
             port=443,
             protocol="https",
+            rtsp_username="user",
+            rtsp_password="secret",
         )
 
         mjpeg_public_info = self.api_module.CameraTransportInfo(

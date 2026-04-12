@@ -150,6 +150,7 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
         self._data: dict[str, Any] = {}
         self._integration_name: str | None = None
         self._integration_version: str | None = None
+        self._default_device_name: str | None = None
         self._reauth_entry: config_entries.ConfigEntry | None = None
         self._reconfigure_entry: config_entries.ConfigEntry | None = None
 
@@ -244,6 +245,15 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
                     )
                     if serial:
                         user_input[CONF_SERIAL_NUMBER] = str(serial).strip()
+                    # Build a descriptive default name from device identity
+                    variant = sys_info.get("variant", "").strip()
+                    sn = str(serial).strip() if serial else ""
+                    if variant and sn:
+                        self._default_device_name = f"{variant} {sn}"
+                    elif variant:
+                        self._default_device_name = variant
+                    elif sn:
+                        self._default_device_name = f"2N Intercom {sn}"
                     self._data = user_input
 
             except Exception:  # pylint: disable=broad-except
@@ -297,7 +307,11 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
             return await self._async_create_entry()
 
         await self._ensure_integration_info()
-        default_name = self._integration_name or "2N Intercom"
+        default_name = (
+            self._default_device_name
+            or self._integration_name
+            or "2N Intercom"
+        )
         peers = await _async_get_called_peers(self._data)
         called_options: list[SelectOptionDict] = [
             SelectOptionDict(
