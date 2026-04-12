@@ -1,0 +1,90 @@
+rules:
+  # Bronze
+  action-setup: done
+  appropriate-polling: done
+  brands:
+    status: done
+    comment: |
+      Brand assets in custom_components/2n_intercom/brand/ directory
+      per the current custom-integration layout.
+  common-modules: done
+  config-flow: done
+  config-flow-test-coverage: done
+  dependency-transparency: done
+  docs-actions: done
+  docs-high-level-description: done
+  docs-installation-instructions: done
+  docs-removal-instructions: done
+  entity-event-setup: done
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure: done
+  test-before-setup: done
+  unique-config-entry: done
+
+  # Silver
+  action-exceptions: done
+  config-entry-unloading: done
+  docs-configuration-parameters: done
+  docs-installation-parameters: done
+  entity-unavailable: done
+  integration-owner: done
+  log-when-unavailable: done
+  parallel-updates: done
+  reauthentication-flow: done
+  test-coverage: done
+
+  # Gold
+  devices: done
+  diagnostics: done
+  discovery-update-info:
+    status: exempt
+    comment: |
+      The intercom is configured with a static host/IP and does not advertise
+      itself for discovery updates.
+  discovery:
+    status: exempt
+    comment: |
+      The 2N IP intercom does not broadcast a discoverable mDNS/SSDP service
+      that maps to a unique device id, so the integration uses manual setup.
+  docs-data-update: done
+  docs-examples: done
+  docs-known-limitations: done
+  docs-supported-devices: done
+  docs-supported-functions: done
+  docs-troubleshooting: done
+  docs-use-cases: done
+  dynamic-devices:
+    status: exempt
+    comment: |
+      One config entry maps to exactly one intercom device; there are no
+      dynamically appearing sub-devices.
+  entity-category: done
+  entity-device-class: done
+  entity-disabled-by-default: done
+  entity-translations: done
+  exception-translations: done
+  icon-translations: done
+  reconfiguration-flow: done
+  repair-issues:
+    status: exempt
+    comment: |
+      No persistent failure modes that require an actionable repair issue —
+      authentication problems are surfaced through the reauth flow instead.
+  stale-devices:
+    status: exempt
+    comment: |
+      One config entry maps to exactly one device; the device is removed when
+      the entry is removed.
+
+  # Platinum
+  async-dependency: done
+  inject-websession: done
+  strict-typing:
+    status: done
+    comment: |
+      mypy passes clean (strict, with HA core stubs).
+      pyright passes clean with pyrightconfig.json suppressing
+      HA-framework-level false positives (cached_property override,
+      stub fallback typing) that affect all HA integrations equally.

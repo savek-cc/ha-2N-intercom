@@ -1,0 +1,96 @@
+blueprint:
+  name: 2N Intercom — Doorbell notification with answer/hangup
+  description: >
+    Sends a mobile notification when the 2N doorbell rings.
+    The notification includes a camera snapshot and two action buttons:
+    Answer (picks up the call) and Hang Up (rejects the call).
+  domain: automation
+  input:
+    doorbell_entity:
+      name: Doorbell binary sensor
+      description: The doorbell entity from the 2N Intercom integration
+      selector:
+        entity:
+          filter:
+            - domain: binary_sensor
+              device_class: occupancy
+    call_state_entity:
+      name: Call state sensor
+      description: The call state sensor that carries the active_session_id attribute
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+    camera_entity:
+      name: Camera entity
+      description: The 2N Intercom camera for the snapshot
+      selector:
+        entity:
+          filter:
+            - domain: camera
+    notify_service:
+      name: Mobile notification service
+      description: >
+        The notify service for your mobile device (e.g. notify.mobile_app_my_phone)
+      selector:
+        text: {}
+    notification_title:
+      name: Notification title
+      default: "Doorbell"
+      selector:
+        text: {}
+    notification_message:
+      name: Notification message
+      default: "Someone is at the door"
+      selector:
+        text: {}
+
+trigger:
+  - platform: state
+    entity_id: !input doorbell_entity
+    to: "on"
+
+action:
+  - variables:
+      session_id: >
+        {{ state_attr(trigger.entity_id | replace('binary_sensor', 'sensor') | replace('doorbell', 'call_state'), 'active_session_id') }}
+  - service: !input notify_service
+    data:
+      title: !input notification_title
+      message: !input notification_message
+      data:
+        image: /api/camera_proxy/{{ (states | selectattr('entity_id', 'eq', (trigger.entity_id | replace('binary_sensor', 'camera') | replace('doorbell', 'camera'))) | map(attribute='entity_id') | first) if true else '' }}
+        actions:
+          - action: ANSWER_CALL
+            title: "Answer"
+          - action: HANGUP_CALL
+            title: "Hang Up"
+  - wait_for_trigger:
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: ANSWER_CALL
+      - platform: event
+        event_type: mobile_app_notification_action
+        event_data:
+          action: HANGUP_CALL
+    timeout: "00:00:30"
+    continue_on_timeout: true
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ wait.trigger and wait.trigger.event.data.action == 'ANSWER_CALL' }}"
+        sequence:
+          - service: 2n_intercom.answer_call
+            data:
+              session_id: "{{ session_id }}"
+      - conditions:
+          - condition: template
+            value_template: "{{ wait.trigger and wait.trigger.event.data.action == 'HANGUP_CALL' }}"
+        sequence:
+          - service: 2n_intercom.hangup_call
+            data:
+              session_id: "{{ session_id }}"
+              reason: rejected
+
+mode: single

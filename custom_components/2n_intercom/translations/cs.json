@@ -2,62 +2,43 @@
   "config": {
     "step": {
       "user": {
-        "title": "Nastavení 2N Intercom - Připojení",
-        "description": "Nakonfigurujte připojení k vašemu zařízení 2N Intercom",
+        "title": "Nastavení 2N Intercom",
+        "description": "Zadejte IP adresu a přihlašovací údaje API vašeho 2N Intercom. Protokol připojení se detekuje automaticky.",
         "data": {
           "host": "IP adresa",
-          "port": "Port",
-          "protocol": "Protokol",
           "username": "Uživatelské jméno",
-          "password": "Heslo",
-          "verify_ssl": "Ověřit SSL certifikát"
+          "password": "Heslo"
         },
         "data_description": {
-          "host": "IP adresa nebo hostname zařízení (např. 192.168.1.100)",
-          "port": "HTTP/HTTPS port zařízení (ponechte výchozí, pokud jste nic neměnili)",
-          "protocol": "Použijte HTTP nebo HTTPS podle nastavení zařízení",
+          "host": "IP adresa nebo hostname zařízení (např. 192.0.2.100)",
           "username": "Přihlašovací jméno zařízení pro API",
-          "password": "Přihlašovací heslo zařízení",
-          "verify_ssl": "Zapněte jen pokud Home Assistant důvěřuje HTTPS certifikátu"
+          "password": "Přihlašovací heslo zařízení"
         }
       },
       "device": {
         "title": "Nastavení 2N Intercom - Zařízení",
-        "description": "Nakonfigurujte funkce zařízení",
+        "description": "Nakonfigurujte funkce zařízení. Relé lze nastavit později v možnostech integrace.",
         "data": {
           "name": "Název",
           "enable_camera": "Povolit kameru",
           "enable_doorbell": "Povolit zvonek",
-          "relay_count": "Počet relé",
           "called_id": "Volaný účet (peer)"
         },
         "data_description": {
           "name": "Zobrazený název v Home Assistant",
           "enable_camera": "Vytvoří entitu kamery pro snímky i stream",
           "enable_doorbell": "Vytvoří entitu zvonku pro detekci zvonění",
-          "relay_count": "Kolik relé chcete nastavit (0-4)",
           "called_id": "Vyberte účet, na který se zvoní. Všechny hovory = zvonění pro všechna tlačítka."
-        }
-      },
-      "relay": {
-        "title": "Nastavení 2N Intercom - Relé {relay_number}",
-        "description": "Nakonfigurujte relé {relay_number}",
-        "data": {
-          "relay_name": "Název relé",
-          "relay_number": "Číslo relé",
-          "relay_device_type": "Typ zařízení",
-          "relay_pulse_duration": "Doba pulsu (milisekundy)"
-        },
-        "data_description": {
-          "relay_name": "Zobrazený název relé",
-          "relay_number": "Fyzické číslo relé na zařízení (1-4)",
-          "relay_device_type": "Dveře vytvoří spínač, vrata vytvoří kryt",
-          "relay_pulse_duration": "Jak dlouho se relé sepne (ms)"
         }
       }
     },
     "error": {
       "cannot_connect": "Nepodařilo se připojit k zařízení. Zkontrolujte prosím IP adresu, port a přihlašovací údaje."
+    },
+    "abort": {
+      "already_configured": "Toto zařízení 2N Intercom je již nakonfigurováno.",
+      "reauth_successful": "Přihlašovací údaje byly úspěšně aktualizovány.",
+      "reconfigure_successful": "Nastavení zařízení bylo úspěšně aktualizováno."
     }
   },
   "options": {
@@ -65,52 +46,81 @@
       "init": {
         "title": "Možnosti 2N Intercom",
         "data": {
-          "door_type": "Typ dveří (starší)",
           "enable_camera": "Povolit kameru",
           "enable_doorbell": "Povolit zvonek"
         }
       },
-      "user": {
-        "title": "Možnosti 2N Intercom - Připojení",
-        "description": "Upravte nastavení připojení",
-        "data_description": {
-          "host": "IP adresa nebo hostname zařízení",
-          "port": "HTTP/HTTPS port zařízení",
-          "protocol": "Použijte HTTP nebo HTTPS podle nastavení zařízení",
-          "username": "Přihlašovací jméno zařízení pro API",
-          "password": "Přihlašovací heslo zařízení",
-          "verify_ssl": "Zapněte jen pokud Home Assistant důvěřuje HTTPS certifikátu"
-        }
-      },
       "device": {
         "title": "Možnosti 2N Intercom - Zařízení",
-        "description": "Upravte funkce zařízení",
+        "description": "Upravte funkce zařízení. Relé jsou automaticky detekována ze zařízení — názvy a typy lze upravit v dalším kroku.",
+        "data": {
+          "name": "Název",
+          "enable_camera": "Povolit kameru",
+          "enable_doorbell": "Povolit zvonek",
+          "scan_interval": "Záložní interval dotazování (sekundy)",
+          "called_id": "Volaný účet (peer)"
+        },
         "data_description": {
           "name": "Zobrazený název v Home Assistant",
           "enable_camera": "Vytvoří entitu kamery",
           "enable_doorbell": "Vytvoří entitu zvonku",
-          "relay_count": "Kolik relé chcete nastavit (0-4)",
-          "door_type": "Legacy typ zámku (dveře nebo vrata)",
+          "scan_interval": "Záložní interval dotazování (2-600 s). Události přinášejí aktualizace v reálném čase; dotazování slouží jen jako záchranná síť. Výchozích 60 s vyhovuje většině instalací.",
           "called_id": "Vyberte účet, na který se zvoní. Všechny hovory = zvonění pro všechna tlačítka."
+        }
+      },
+      "camera": {
+        "title": "Možnosti 2N Intercom - Kamera",
+        "description": "Vyladění video streamu z 2N kamery v Home Assistantu. Snížením rozlišení a snímkové frekvence MJPEG výrazně ušetříte přenos dat na nástěnkách, kde je kamera trvale viditelná.",
+        "data": {
+          "live_view_mode": "Režim živého náhledu",
+          "camera_source": "Zdroj kamery",
+          "mjpeg_width": "Šířka MJPEG (pixely)",
+          "mjpeg_height": "Výška MJPEG (pixely)",
+          "mjpeg_fps": "Snímky za sekundu (MJPEG)",
+          "rtsp_username": "RTSP uživatelské jméno",
+          "rtsp_password": "RTSP heslo"
+        },
+        "data_description": {
+          "live_view_mode": "auto upřednostní RTSP, pak MJPEG, případně jen JPEG snímky",
+          "camera_source": "Který senzor zařízení použít — internal je vestavěná kamera, external je sekundární modul (pokud je osazen)",
+          "mjpeg_width": "Šířka MJPEG streamu vyžádaného od zařízení (např. 640)",
+          "mjpeg_height": "Výška MJPEG streamu vyžádaného od zařízení (např. 480)",
+          "mjpeg_fps": "Snímky za sekundu pro MJPEG stream (1-15)",
+          "rtsp_username": "Uživatelské jméno pro RTSP streamovací službu 2N (konfiguruje se samostatně v rozhraní zařízení pod Služby > Streaming)",
+          "rtsp_password": "Heslo k účtu RTSP streamovací služby"
         }
       },
       "relay": {
         "title": "Možnosti 2N Intercom - Relé {relay_number}",
-        "description": "Upravte relé {relay_number}",
+        "description": "Nastavení automaticky detekovaného relé {relay_number}. Pro dveřní zámky obvykle ~2000 ms puls, pro křídlová vrata ~15000 ms.",
+        "data": {
+          "relay_number": "Číslo relé",
+          "relay_name": "Název relé",
+          "relay_device_type": "Typ zařízení",
+          "relay_pulse_duration": "Doba pulsu (milisekundy)"
+        },
         "data_description": {
-          "relay_name": "Zobrazený název relé",
-          "relay_number": "Fyzické číslo relé na zařízení (1-4)",
+          "relay_number": "Fyzické číslo relé na zařízení (automaticky detekováno)",
+          "relay_name": "Zobrazený název relé v Home Assistant",
           "relay_device_type": "Dveře vytvoří spínač, vrata vytvoří kryt",
-          "relay_pulse_duration": "Jak dlouho se relé sepne (ms)"
+          "relay_pulse_duration": "Délka spínacího pulsu odeslaného relé (ms). Výchozí hodnota je switchOnDuration nakonfigurovaná na zařízení."
         }
       }
     }
   },
   "selector": {
-    "door_type": {
+    "live_view_mode": {
       "options": {
-        "door": "Dveře",
-        "gate": "Vrata"
+        "auto": "Auto (RTSP > MJPEG > snímky)",
+        "rtsp": "Pouze RTSP",
+        "mjpeg": "Pouze MJPEG",
+        "jpeg_only": "Pouze JPEG snímky"
+      }
+    },
+    "camera_source": {
+      "options": {
+        "internal": "Interní (vestavěná kamera)",
+        "external": "Externí (sekundární modul)"
       }
     },
     "protocol": {
@@ -123,6 +133,95 @@
       "options": {
         "door": "Dveře (momentální spínač)",
         "gate": "Vrata (garážová vrata)"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "doorbell": {
+        "name": "Zvonek"
+      },
+      "input_1": {
+        "name": "Vstup 1"
+      },
+      "relay_1_active": {
+        "name": "Relé 1 aktivní"
+      }
+    },
+    "sensor": {
+      "sip_registration": {
+        "name": "Registrace SIP"
+      },
+      "call_state": {
+        "name": "Stav hovoru"
+      }
+    },
+    "camera": {
+      "camera": {
+        "name": "Kamera"
+      }
+    }
+  },
+  "exceptions": {
+    "no_loaded_entries": {
+      "message": "2N Intercom nemá žádné načtené konfigurační záznamy."
+    },
+    "entry_not_loaded": {
+      "message": "Konfigurační záznam {config_entry_id} není načten pro 2N Intercom."
+    },
+    "ambiguous_entry": {
+      "message": "Je načteno více konfiguračních záznamů 2N Intercom; uveďte config_entry_id."
+    },
+    "no_active_session": {
+      "message": "Není k dispozici žádná aktivní relace hovoru."
+    },
+    "answer_call_failed": {
+      "message": "Nepodařilo se přijmout hovor relace {session_id}."
+    },
+    "hangup_call_failed": {
+      "message": "Nepodařilo se zavěsit hovor relace {session_id}."
+    },
+    "call_status_query_failed": {
+      "message": "Nepodařilo se zjistit stav hovoru 2N před zavěšením: {error}"
+    },
+    "hangup_partial_failure": {
+      "message": "Nepodařilo se zavěsit relaci hovoru {sessions}."
+    },
+    "invalid_hangup_reason": {
+      "message": "Neplatný důvod zavěšení '{reason}'. Platné hodnoty: {valid}."
+    }
+  },
+  "services": {
+    "answer_call": {
+      "name": "Přijmout hovor",
+      "description": "Přijmout aktivní hovor 2N Intercom nebo konkrétní relaci.",
+      "fields": {
+        "config_entry_id": {
+          "name": "ID konfigurace",
+          "description": "Cílit na konkrétní záznam 2N Intercom, pokud je načteno více."
+        },
+        "session_id": {
+          "name": "ID relace",
+          "description": "Přepsat aktivní relaci hovoru, kterou přijmout."
+        }
+      }
+    },
+    "hangup_call": {
+      "name": "Zavěsit hovor",
+      "description": "Zavěsit aktivní hovor 2N Intercom nebo konkrétní relaci.",
+      "fields": {
+        "config_entry_id": {
+          "name": "ID konfigurace",
+          "description": "Cílit na konkrétní záznam 2N Intercom, pokud je načteno více."
+        },
+        "session_id": {
+          "name": "ID relace",
+          "description": "Přepsat aktivní relaci hovoru, kterou zavěsit."
+        },
+        "reason": {
+          "name": "Důvod",
+          "description": "Důvod zavěšení odeslaný zařízení."
+        }
       }
     }
   }

@@ -1,20 +1,15 @@
-# Door Type Selection and HomeKit Integration
+# HomeKit Integration
 
 ## Overview
 
-This integration allows users to select between two door types:
-- **Door** (Dveře) - Standard door lock
-- **Gate** (Vrata) - Gate/garage door
+This integration exposes HomeKit-friendly entities for camera, doorbell, and door/gate control. The doorbell tile lives **on the camera accessory** in HomeKit — you must link the doorbell binary sensor to the camera in the HomeKit bridge YAML.
 
-The selection made by the user is automatically propagated to the HomeKit bridge, ensuring the correct accessory type is exposed in HomeKit.
+- **Camera path** — the camera is `MjpegCamera`-based, so HomeKit gets a clean MJPEG live view without ffmpeg or HLS
+- **Relay-based path** — door relays are exposed as switches and gate relays as covers
+- **Legacy no-relay path** — the fallback lock entity still uses door/gate semantics for HomeKit mapping
+- **Doorbell path** — the doorbell sensor must be linked to the camera via YAML
 
-## Doorbell in HomeKit (Important)
-
-HomeKit shows the doorbell **on the camera accessory**, not as a standalone binary sensor.
-To get the doorbell tile and notifications in the Home app, you must link the
-doorbell binary sensor to the camera in the HomeKit bridge configuration.
-
-**Required setup (YAML only):**
+## Doorbell linking (required for HomeKit)
 
 ```yaml
 homekit:
@@ -28,96 +23,76 @@ homekit:
         linked_doorbell_sensor: binary_sensor.2n_intercom_doorbell
 ```
 
-**Rules that must be followed:**
-- Do not add the `binary_sensor.*_doorbell` to the HomeKit filter.
-- Do not include the camera or doorbell in any other HomeKit bridge.
-- HomeKit bridge configuration is YAML-only; it cannot be set from UI.
+**Rules:**
+- Do **not** add the `binary_sensor.*_doorbell` to the HomeKit filter
+- Do **not** include the camera or doorbell in any other HomeKit bridge
+- HomeKit bridge configuration is YAML-only; it cannot be set from the UI
+- Restart Home Assistant and re-add the bridge in the Home app after changing this YAML
 
-After changing YAML, restart Home Assistant and re-add the HomeKit bridge in the Home app.
+## How it works
 
-## How It Works
+### 1. Configuration flow
 
-### 1. Configuration Flow
+When setting up the integration, users go through the multi-step flow:
 
-When setting up the integration, users can select the door type via the configuration UI:
+- **Connection** — host, port, protocol, username, password, SSL verification
+- **Device** — name, camera, doorbell, relay count, optional ringing peer
+- **Relay** — per-relay door/gate type, relay number, pulse duration
 
-```python
-# In config_flow.py
-data_schema = vol.Schema({
-    vol.Optional("name", default="2N Intercom"): cv.string,
-    vol.Required(CONF_DOOR_TYPE, default=DOOR_TYPE_DOOR): vol.In(DOOR_TYPES),
-})
-```
+The integration also supports **reauth** (auto-triggered on credential failure) and **reconfigure** (HA 2024.10+) flows for changing connection details without removing the entry.
 
-### 2. Door Type Storage
+### 2. Relay type and legacy lock mapping
 
-The selected door type is stored in the config entry data and can be updated via options flow:
+Relay-based installs store door/gate behaviour per configured relay — door relays surface as switches, gate relays as covers. When no relays are configured the integration falls back to a single legacy lock entity whose `device_class` is set from the same door/gate option, so existing pre-1.0 setups still get a correctly-typed HomeKit accessory.
 
-```python
-# Users can change the door type later via integration options
-class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):
-    async def async_step_init(self, user_input: dict[str, Any] | None = None):
-        # Allows updating door type after initial setup
-        ...
-```
+### 3. HomeKit entity mapping
 
-### 3. HomeKit Device Class Mapping
+Home Assistant's HomeKit bridge uses the entity's class to pick an accessory type:
 
-The door type is mapped to the appropriate HomeKit device class in the lock entity:
+| HA entity | HomeKit accessory |
+|---|---|
+| `camera.<intercom>_camera` (linked to doorbell sensor) | **Video Doorbell** — the doorbell tile lives here, not on the binary sensor |
+| `switch.<intercom>_<door_relay>` | Switch (or Lock, depending on bridge filter) |
+| `cover.<intercom>_<gate_relay>` | **Garage Door Opener** — open/close states |
+| `lock.<intercom>_lock` (legacy fallback) | Lock when `device_class=None`; Garage Door Opener when `device_class="gate"` |
 
-```python
-# In lock.py
-def __init__(self, config_entry: ConfigEntry, door_type: str) -> None:
-    if door_type == DOOR_TYPE_GATE:
-        self._attr_device_class = "gate"
-    # Door type has no device class (default lock behavior)
-```
+The doorbell binary sensor itself uses `BinarySensorDeviceClass.OCCUPANCY`. HomeKit's "programmable doorbell" service is provided exclusively by the linked-camera-accessory pattern above — the binary sensor's own class is irrelevant for the HomeKit tile.
 
-### 4. HomeKit Accessory Types
+### 4. Real cached state for status entities
 
-Home Assistant's HomeKit integration uses the device class to determine the accessory type:
+`binary_sensor.<intercom>_input_1` and `binary_sensor.<intercom>_relay_1_active` are derived from the device's `io/status` and `switch/status` endpoints. They reflect real device state, not optimistic switching, which keeps HomeKit and HA in sync after manual relay activations from the 2N keypad or web UI.
 
-- **Door** (no device_class): Exposed as **Lock** accessory in HomeKit
-  - Appears as a standard door lock in the Home app
-  - Shows locked/unlocked states
-  - Can be locked/unlocked
+## User experience
 
-- **Gate** (device_class="gate"): Exposed as **Garage Door Opener** accessory in HomeKit
-  - Appears as a garage door in the Home app
-  - Shows open/closed states
-  - Can be opened/closed
-  - More appropriate for gates and large doors
+### Setup flow
 
-## User Experience
+1. User adds the **2N Intercom** integration
+2. Enters connection settings — credentials are validated against `system/info`
+3. Configures device options: camera, doorbell, relay count, optional ringing peer
+4. Configures relay type and pulse duration per relay
+5. Integration creates camera, doorbell, status sensors, relay entities, or the legacy lock entity when no relays are configured
 
-### Setup Flow
+### Changing settings later
 
-1. User adds the "2N Intercom" integration
-2. User enters a name for the device
-3. **User selects door type**: Door or Gate
-4. Integration creates a lock entity with appropriate HomeKit configuration
+- **Connection / credentials** → Reconfigure flow (host, port, protocol, credentials, SSL)
+- **Device features or relay settings** → Options flow ("Configure" button on the integration card)
+- **Credential rejection** → Reauth flow auto-triggered with a notification
 
-### Changing Door Type
+### HomeKit integration
 
-1. User goes to integration options
-2. User selects new door type
-3. Integration reloads with new configuration
-4. HomeKit accessory updates to new type
+Once the integration is set up and the HomeKit bridge is configured in HA:
 
-### HomeKit Integration
+1. The camera is included in the HomeKit bridge and linked to the doorbell sensor via YAML
+2. The relevant relay entities (or the legacy lock entity) are included in the HomeKit bridge
+3. The device appears in the Home app with the correct accessory type
+4. iOS/macOS users can control the door / gate
+5. Siri commands work (e.g. "Hey Siri, open the front door")
 
-Once the integration is set up and the HomeKit bridge is configured in Home Assistant:
+## Technical details
 
-1. The lock entity is automatically discovered by the HomeKit bridge
-2. The device appears in the Home app with the correct accessory type
-3. Users can control the door/gate from their iOS/macOS devices
-4. Siri can control the door/gate using appropriate commands
+### HomeKit declaration
 
-## Technical Details
-
-### HomeKit Bridge Declaration
-
-The integration declares HomeKit support in `manifest.json`:
+`manifest.json`:
 
 ```json
 {
@@ -126,55 +101,50 @@ The integration declares HomeKit support in `manifest.json`:
 }
 ```
 
-This tells Home Assistant that this integration is HomeKit-compatible.
+This tells HA the integration is HomeKit-compatible.
 
-### Device Class Values
+### Doorbell device class
 
-- `None` (default): Standard lock
-- `"gate"`: Gate/garage door opener
+`binary_sensor.<intercom>_doorbell` uses `BinarySensorDeviceClass.OCCUPANCY` because the underlying signal is "someone is at the door". The HomeKit programmable doorbell tile is created by linking this binary sensor to the camera (`linked_doorbell_sensor`), not by changing its device class.
 
-### Lock Entity Features
+### Camera transport
 
-The lock entity supports:
-- `LockEntityFeature.OPEN`: Allows opening the door/gate
-- Locked/unlocked states
-- Device information for proper identification in HomeKit
+The camera is built on `homeassistant.components.mjpeg.MjpegCamera`. Credentials are passed via the `username` and `password` constructor kwargs and **never** appear in the URL. `stream_source()` only returns an RTSP URL when the device has the RTSP licence — for the typical IP Verso baseline, MJPEG is served natively to HomeKit and HA dashboards alike, with no ffmpeg in the loop.
+
+### Services available to automations
+
+| Service | Use case |
+|---|---|
+| `2n_intercom.answer_call` | Answer the active call |
+| `2n_intercom.hangup_call` | Hang up the active or a specific session, with optional reason |
+
+These pair naturally with HomeKit / mobile actionable notifications: tap "Open door" → fire the relay → call `2n_intercom.hangup_call` with the `active_session_id` to end the call cleanly.
 
 ## Translations
 
-The door type selection is translated in both English and Czech:
+The legacy door/gate terminology is translated in both English and Czech.
 
-**English:**
-- Door Type → "Door" or "Gate"
+| EN | CS |
+|---|---|
+| Door | Dveře |
+| Gate | Vrata |
+| Door (momentary switch) | Dveře (momentální spínač) |
+| Gate (garage door opener) | Vrata (garážová vrata) |
 
-**Czech:**
-- Typ dveří → "Dveře" nebo "Vrata"
+## Example relay configurations
 
-## Example Configuration
-
-### Example 1: Standard Door
-
-```yaml
-name: "Front Door"
-door_type: "door"
-```
-
-Result in HomeKit: Lock accessory
-
-### Example 2: Gate
+### Door relay → switch in HomeKit
 
 ```yaml
-name: "Garden Gate"
-door_type: "gate"
+relay_name: "Front Door"
+relay_device_type: "door"
+relay_pulse_duration: 2000
 ```
 
-Result in HomeKit: Garage Door Opener accessory
+### Gate relay → garage door opener in HomeKit
 
-## Future Enhancements
-
-Potential future improvements:
-- Add actual 2N API integration for real door control
-- Support for multiple doors/gates per device
-- Door state sensors (open/closed)
-- Video doorbell support
-- Call notification support
+```yaml
+relay_name: "Driveway Gate"
+relay_device_type: "gate"
+relay_pulse_duration: 15000
+```

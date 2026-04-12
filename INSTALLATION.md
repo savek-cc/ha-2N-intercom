@@ -4,174 +4,151 @@
 
 ### 1. Installation
 
-Copy the integration to your Home Assistant configuration directory:
+Copy the integration into your Home Assistant `config/custom_components/`:
 
 ```bash
-# Navigate to your Home Assistant config directory
 cd /config
-
-# Create custom_components directory if it doesn't exist
 mkdir -p custom_components
-
-# Copy the integration
 cp -r /path/to/ha-2N-intercom/custom_components/2n_intercom custom_components/
 ```
 
+(Or install via HACS — see [README.md](README.md#installation).)
+
 ### 2. Restart Home Assistant
 
-After copying the files, restart Home Assistant to load the integration.
+Restart HA to pick up the new integration.
 
-### 3. Add Integration
+### 3. Add the integration
 
-1. Go to **Settings** → **Devices & Services**
-2. Click **Add Integration**
-3. Search for **2N Intercom**
-4. Click on it to start the setup wizard
+1. **Settings → Devices & Services → + Add Integration**
+2. Search for **2N Intercom**
+3. Run the multi-step wizard
 
-### 4. Configure Integration
+### 4. Configure
 
-**Setup Wizard:**
+The wizard has two steps:
 
-![Setup Wizard](docs/setup_wizard.png)
+- **Connection** — host, username, password. Protocol (HTTPS/HTTP) and port (443/80) are auto-detected
+- **Device** — display name, enable camera, enable doorbell, optional ringing account (peer)
 
-Fields:
-- **Name**: Enter a name for your device (e.g., "Front Door", "Garden Gate")
-- **Door Type**: Select the type:
-  - **Door** (Dveře): For regular doors - will appear as a door lock in HomeKit
-  - **Gate** (Vrata): For gates/garage doors - will appear as a garage door opener in HomeKit
+Relays are auto-discovered from the device and configured later via the **Options** flow (Settings → Devices & Services → 2N Intercom → **Configure**).
 
-Example configurations:
+Example:
 
-**For a front door:**
 ```
-Name: Front Door
-Door Type: Door
-```
+Connection
+  Host: 192.0.2.20
+  Username: homeassistant
+  Password: ****
+  → auto-detects HTTPS:443
 
-**For a gate:**
-```
-Name: Garden Gate
-Door Type: Gate
+Device
+  Name: Front Door
+  Camera: yes
+  Doorbell: yes
+  Ringing account: All calls
 ```
 
 ### 5. Verify in Home Assistant
 
-After setup, you should see:
-- A lock entity named `lock.<your_device_name>`
-- Device information in the Devices view
-- The entity will show as "Locked" by default
+After setup you should see:
 
-### 6. HomeKit Integration
+- `camera.<name>_camera` — JPEG snapshots and a native MJPEG live view (no ffmpeg)
+- `binary_sensor.<name>_doorbell` — event-driven ring detection
+- `binary_sensor.<name>_input_1` — real device input state
+- `binary_sensor.<name>_relay_1_active` — real cached relay state
+- `sensor.<name>_sip_registration` — SIP registration diagnostic
+- `sensor.<name>_call_state` — call state with `active_session_id` attribute
+- `switch.<name>_<relay_name>` for door-type relays (auto-discovered)
+- `cover.<name>_<relay_name>` for gate-type relays (after options flow override)
 
-If you have the HomeKit integration enabled in Home Assistant:
+### 6. HomeKit (optional)
 
-1. The lock entity will automatically be available to HomeKit
-2. Open the Home app on your iOS/macOS device
-3. You should see your door/gate with the appropriate icon:
-   - **Door type**: Lock icon 🔒
-   - **Gate type**: Garage door icon 🏠
+If you run the HA HomeKit Bridge, the camera entity exposes a HomeKit-compatible MJPEG stream and the doorbell binary sensor can be linked to it for video-doorbell behaviour. See [HOMEKIT_INTEGRATION.md](HOMEKIT_INTEGRATION.md) for the YAML link snippet.
 
-### 7. Using the Lock
+### 7. Using the entities
 
-**In Home Assistant:**
-- Click the lock entity to unlock
-- Click again to lock
-- Use the "Open" button to trigger the door/gate opening
+- **Camera** — open the camera card; the MJPEG live view starts directly without ffmpeg / HLS
+- **Doorbell** — automate on `binary_sensor.<name>_doorbell` turning `on`. The `sensor.<name>_call_state` entity carries the `active_session_id` attribute you'll need to terminate the same session
+- **Door relay** — call `switch.turn_on` (the relay self-resets after the configured pulse duration)
+- **Gate relay** — call `cover.open_cover` / `cover.close_cover`
 
-**In HomeKit:**
-- For doors: Tap to lock/unlock
-- For gates: Tap to open/close
+## Reconfiguring or Re-authenticating
 
-**With Siri:**
-- "Hey Siri, unlock the front door"
-- "Hey Siri, open the garden gate"
+The integration supports the modern HA flows:
 
-## Changing Door Type
+- **Reconfigure** (HA 2024.10+) — Settings → Devices & Services → 2N Intercom → ⋮ → **Reconfigure**. Update host, port, protocol, credentials, or SSL verification without removing the entry. Automations stay attached.
+- **Reauth** — when the device starts rejecting credentials the integration raises `ConfigEntryAuthFailed`, and HA shows a notification asking the user to re-enter the password. Click it to walk through the reauth flow.
 
-To change the door type after initial setup:
+For per-relay or device-feature changes, use the regular **Configure** (Options) button on the integration card.
 
-1. Go to **Settings** → **Devices & Services**
-2. Find the **2N Intercom** integration
-3. Click **Configure**
-4. Select the new **Door Type**
-5. Click **Submit**
+## Services
 
-The integration will reload with the new configuration, and the HomeKit accessory type will update accordingly.
+| Service | Purpose |
+|---|---|
+| `2n_intercom.answer_call` | Answer the active call session (or a specific `session_id`) |
+| `2n_intercom.hangup_call` | Hang up the active call session (or a specific `session_id`) with optional `reason` (`normal` / `rejected` / `busy`) |
+
+Both services target a config entry — pick **2N Intercom** as the integration target in the UI, or pass `data.config_entry_id` from YAML.
+
+Recommended pattern: pair `hangup_call` with the call-state sensor's `active_session_id` attribute so an automation only ends the session it actually answered.
+
+```yaml
+- service: 2n_intercom.hangup_call
+  target:
+    config_entry: <entry_id>
+  data:
+    session_id: "{{ state_attr('sensor.front_door_call_state', 'active_session_id') }}"
+    reason: normal
+```
 
 ## Troubleshooting
 
 ### Integration not appearing
-- Ensure the files are in the correct location: `config/custom_components/2n_intercom/`
-- Restart Home Assistant
-- Check the logs for any errors
+- Files must live in `config/custom_components/2n_intercom/`
+- Restart HA, check logs for import errors
 
-### HomeKit not showing the device
-- Ensure HomeKit integration is set up in Home Assistant
-- Check that the lock entity is not excluded from HomeKit
-- Try restarting the HomeKit bridge
+### Setup fails with "Cannot Connect"
+- Verify host/port and try HTTP if HTTPS verification is failing
+- The 2N HTTP API exposes a **per-service-group** auth setting in the device web UI under **Services → HTTP API**. Each service group (Camera, Switch, I/O, Phone, Call, Log) can be set to None, Basic, or Digest independently. The integration handles whatever combination the operator has chosen, but the configured username/password must be valid for **every** group it talks to
 
-### Wrong accessory type in HomeKit
-- Check the door type configuration in the integration options
-- Change the door type and reload the integration
-- Restart the HomeKit bridge
+### Reauth notification keeps reappearing
+- Credentials really are wrong, or the account is locked on the device. Clear it via the 2N web UI, then complete the reauth flow
 
-## Advanced Configuration
+### Camera entity exists but has no live view
+- Open the entity attributes — `live_view_selected_mode` should be `mjpeg` (or `rtsp`), and `mjpeg_available` should be `true`
+- If the device's RTSP licence isn't enabled, MJPEG is the only path. The integration prefers MJPEG automatically when RTSP is unreachable
+- Reload the integration after changing camera caps on the device
 
-### Ringing Account Filter
+### Doorbell binary sensor not flipping
+- Ring detection is exclusively event-driven via `/api/log/subscribe` — there is no polling fallback for ring events. Subscription failures are retried with exponential backoff; ring events during a gap are lost
+- Check the integration log; a `Log subscription … established` debug line confirms the event channel is up
 
-If you have multiple buttons, you can limit doorbell events to a single
-account by selecting **Ringing account (peer)** in options.
+### Relay not actuating
+- Verify the relay number matches the physical hardware (1-4)
+- Test the same `switch/ctrl` call from `curl` against the device
+- The relay-active binary sensor reflects real device state — if it doesn't toggle, the device itself isn't switching
 
-### Multiple Doors/Gates
+## Multiple instances
 
-You can add multiple instances of the integration for different doors:
-
-1. Add the integration again
-2. Give it a different name
-3. Select the appropriate door type
-
-Each instance will create a separate lock entity.
-
-### Automation Examples
-
-**Unlock when arriving home:**
-```yaml
-automation:
-  - alias: "Unlock front door when arriving"
-    trigger:
-      - platform: zone
-        entity_id: person.john
-        zone: zone.home
-        event: enter
-    action:
-      - service: lock.unlock
-        target:
-          entity_id: lock.front_door
-```
-
-**Open gate at specific times:**
-```yaml
-automation:
-  - alias: "Open gate in the morning"
-    trigger:
-      - platform: time
-        at: "07:00:00"
-    action:
-      - service: lock.open
-        target:
-          entity_id: lock.garden_gate
-```
+Add the integration multiple times to drive several intercoms — each entry has its own coordinator, services target, and entities.
 
 ## Development Status
 
-This is a basic implementation that provides:
-- ✅ Door type selection
-- ✅ HomeKit integration
-- ✅ Lock entity with open support
-- ⏳ Real 2N API integration (planned)
-- ⏳ Door state sensors (planned)
-- ⏳ Video doorbell support (planned)
+Implemented:
+
+- Connection / device config flow + reauth + reconfigure + options flow
+- Native MJPEG live view (no ffmpeg) and RTSP fallback
+- Event-driven state updates (ring, switch, IO, phone, config) with backup polling safety net
+- Diagnostic sensors (SIP registration, call state)
+- Real cached relay/input state
+- `answer_call` / `hangup_call` services
+- Auto-discovered switch / cover entities for relays
+- HomeKit bridge mapping
+- Full HA 2026.4+ compliance
+
+Downstream HA automations (mobile actionable notifications, KNX door opening, etc.) consume the entities and services above; they're not part of the fork itself.
 
 ## Support
 
-For issues or questions, please open an issue on the GitHub repository.
+Open an issue on the GitHub repository.

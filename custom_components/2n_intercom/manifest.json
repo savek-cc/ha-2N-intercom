@@ -1,12 +1,15 @@
 {
   "domain": "2n_intercom",
   "name": "2N Intercom",
-  "codeowners": ["@mastalir1980"],
+  "codeowners": ["@mastalir1980", "@savek-cc"],
   "config_flow": true,
-  "documentation": "https://github.com/mastalir1980/ha-2N-intercom",
+  "documentation": "https://github.com/savek-cc/ha-2N-intercom",
   "homekit": {},
-  "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/mastalir1980/ha-2N-intercom/issues",
-  "requirements": ["aiohttp", "async_timeout"],
-  "version": "1.0.1"
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/savek-cc/ha-2N-intercom/issues",
+  "loggers": ["custom_components.2n_intercom"],
+  "quality_scale": "platinum",
+  "requirements": [],
+  "version": "1.3.1"
 }

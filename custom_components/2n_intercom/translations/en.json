@@ -2,62 +2,43 @@
   "config": {
     "step": {
       "user": {
-        "title": "2N Intercom Setup - Connection",
-        "description": "Configure connection to your 2N Intercom device",
+        "title": "2N Intercom Setup",
+        "description": "Enter the IP address and API credentials of your 2N Intercom. The connection protocol is detected automatically.",
         "data": {
           "host": "IP Address",
-          "port": "Port",
-          "protocol": "Protocol",
           "username": "Username",
-          "password": "Password",
-          "verify_ssl": "Verify SSL Certificate"
+          "password": "Password"
         },
         "data_description": {
-          "host": "IP address or hostname of the intercom (e.g., 192.168.1.100)",
-          "port": "HTTP/HTTPS port on the device (leave default unless changed)",
-          "protocol": "Use HTTP or HTTPS based on device configuration",
+          "host": "IP address or hostname of the intercom (e.g., 192.0.2.100)",
           "username": "Device login username for API access",
-          "password": "Device login password",
-          "verify_ssl": "Enable only if the HTTPS certificate is trusted by Home Assistant"
+          "password": "Device login password"
         }
       },
       "device": {
         "title": "2N Intercom Setup - Device",
-        "description": "Configure device features",
+        "description": "Configure device features. Relays can be configured later in the integration options.",
         "data": {
           "name": "Name",
           "enable_camera": "Enable Camera",
           "enable_doorbell": "Enable Doorbell",
-          "relay_count": "Number of Relays",
           "called_id": "Ringing account (peer)"
         },
         "data_description": {
           "name": "Displayed name in Home Assistant",
           "enable_camera": "Create the camera entity for snapshots and streaming",
           "enable_doorbell": "Create the doorbell entity for ring detection",
-          "relay_count": "How many relays you want to configure (0-4)",
           "called_id": "Select which account should ring. Choose All calls to ring on every button."
-        }
-      },
-      "relay": {
-        "title": "2N Intercom Setup - Relay {relay_number}",
-        "description": "Configure relay {relay_number}",
-        "data": {
-          "relay_name": "Relay Name",
-          "relay_number": "Relay Number",
-          "relay_device_type": "Device Type",
-          "relay_pulse_duration": "Pulse Duration (milliseconds)"
-        },
-        "data_description": {
-          "relay_name": "Displayed name for this relay",
-          "relay_number": "Physical relay number on the device (1-4)",
-          "relay_device_type": "Door creates a switch, gate creates a cover",
-          "relay_pulse_duration": "How long to activate the relay (ms)"
         }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to the device. Please check the IP address, port, and credentials."
+    },
+    "abort": {
+      "already_configured": "This 2N Intercom device is already configured.",
+      "reauth_successful": "Authentication updated successfully.",
+      "reconfigure_successful": "Device configuration updated successfully."
     }
   },
   "options": {
@@ -65,74 +46,81 @@
       "init": {
         "title": "2N Intercom Options",
         "data": {
-          "door_type": "Door Type (Legacy)",
           "enable_camera": "Enable Camera",
           "enable_doorbell": "Enable Doorbell"
         }
       },
-      "user": {
-        "title": "2N Intercom Options - Connection",
-        "description": "Update connection settings",
-        "data": {
-          "host": "IP Address",
-          "port": "Port",
-          "protocol": "Protocol",
-          "username": "Username",
-          "password": "Password",
-          "verify_ssl": "Verify SSL Certificate"
-        },
-        "data_description": {
-          "host": "IP address or hostname of the intercom",
-          "port": "HTTP/HTTPS port on the device",
-          "protocol": "Use HTTP or HTTPS based on device configuration",
-          "username": "Device login username for API access",
-          "password": "Device login password",
-          "verify_ssl": "Enable only if the HTTPS certificate is trusted"
-        }
-      },
       "device": {
         "title": "2N Intercom Options - Device",
-        "description": "Update device features",
+        "description": "Update device features. Relays are auto-detected from the device — override names and types in the next step.",
         "data": {
           "name": "Name",
           "enable_camera": "Enable Camera",
           "enable_doorbell": "Enable Doorbell",
-          "relay_count": "Number of Relays",
-          "door_type": "Door Type (Legacy)",
+          "scan_interval": "Backup polling interval (seconds)",
           "called_id": "Ringing account (peer)"
         },
         "data_description": {
           "name": "Displayed name in Home Assistant",
           "enable_camera": "Create the camera entity",
           "enable_doorbell": "Create the doorbell entity",
-          "relay_count": "How many relays you want to configure (0-4)",
-          "door_type": "Legacy lock type (door or gate)",
+          "scan_interval": "Backup polling interval (2-600 s). Events deliver real-time updates; polling only runs as a safety net. Default 60 s is fine for most setups.",
           "called_id": "Select which account should ring. Choose All calls to ring on every button."
+        }
+      },
+      "camera": {
+        "title": "2N Intercom Options - Camera",
+        "description": "Tune how Home Assistant streams video from the 2N camera. Lower MJPEG resolution and frame rate dramatically reduce bandwidth on continuously visible dashboards.",
+        "data": {
+          "live_view_mode": "Live view mode",
+          "camera_source": "Camera source",
+          "mjpeg_width": "MJPEG width (pixels)",
+          "mjpeg_height": "MJPEG height (pixels)",
+          "mjpeg_fps": "MJPEG frame rate (fps)",
+          "rtsp_username": "RTSP username",
+          "rtsp_password": "RTSP password"
+        },
+        "data_description": {
+          "live_view_mode": "auto picks RTSP when RTSP credentials are configured and valid, then MJPEG, then JPEG snapshots only",
+          "camera_source": "Which sensor on the device to stream — internal is the built-in lens; external is a secondary camera module if fitted",
+          "mjpeg_width": "Width of the MJPEG stream requested from the device (e.g. 640)",
+          "mjpeg_height": "Height of the MJPEG stream requested from the device (e.g. 480)",
+          "mjpeg_fps": "Frames per second for the MJPEG stream (1-15)",
+          "rtsp_username": "Username for the 2N RTSP streaming service (configured separately from the HTTP API in the device web UI under Services > Streaming)",
+          "rtsp_password": "Password for the RTSP streaming service account"
         }
       },
       "relay": {
         "title": "2N Intercom Options - Relay {relay_number}",
-        "description": "Update relay {relay_number}",
+        "description": "Override settings for auto-detected relay {relay_number}. Door strikes typically need ~2000 ms pulse, swing-gate triggers ~15000 ms.",
         "data": {
-          "relay_name": "Relay Name",
           "relay_number": "Relay Number",
+          "relay_name": "Relay Name",
           "relay_device_type": "Device Type",
           "relay_pulse_duration": "Pulse Duration (milliseconds)"
         },
         "data_description": {
-          "relay_name": "Displayed name for this relay",
-          "relay_number": "Physical relay number on the device (1-4)",
-          "relay_device_type": "Door creates a switch, gate creates a cover",
-          "relay_pulse_duration": "How long to activate the relay (ms)"
+          "relay_number": "Physical relay number on the device (auto-detected)",
+          "relay_name": "Displayed name for this relay in Home Assistant",
+          "relay_device_type": "Door creates a switch entity, gate creates a cover entity",
+          "relay_pulse_duration": "Trigger pulse length sent to the relay (ms). Default is the device-configured switchOnDuration."
         }
       }
     }
   },
   "selector": {
-    "door_type": {
+    "live_view_mode": {
       "options": {
-        "door": "Door",
-        "gate": "Gate"
+        "auto": "Auto (RTSP > MJPEG > snapshots)",
+        "rtsp": "RTSP only",
+        "mjpeg": "MJPEG only",
+        "jpeg_only": "JPEG snapshots only"
+      }
+    },
+    "camera_source": {
+      "options": {
+        "internal": "Internal (built-in camera)",
+        "external": "External (secondary module)"
       }
     },
     "protocol": {
@@ -145,6 +133,95 @@
       "options": {
         "door": "Door (momentary switch)",
         "gate": "Gate (garage door opener)"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "doorbell": {
+        "name": "Doorbell"
+      },
+      "input_1": {
+        "name": "Input 1"
+      },
+      "relay_1_active": {
+        "name": "Relay 1 active"
+      }
+    },
+    "sensor": {
+      "sip_registration": {
+        "name": "SIP registration"
+      },
+      "call_state": {
+        "name": "Call state"
+      }
+    },
+    "camera": {
+      "camera": {
+        "name": "Camera"
+      }
+    }
+  },
+  "exceptions": {
+    "no_loaded_entries": {
+      "message": "2N Intercom has no loaded config entries."
+    },
+    "entry_not_loaded": {
+      "message": "Config entry {config_entry_id} is not loaded for 2N Intercom."
+    },
+    "ambiguous_entry": {
+      "message": "Multiple 2N Intercom config entries are loaded; include config_entry_id."
+    },
+    "no_active_session": {
+      "message": "No active call session is available to target."
+    },
+    "answer_call_failed": {
+      "message": "Failed to answer call session {session_id}."
+    },
+    "hangup_call_failed": {
+      "message": "Failed to hang up call session {session_id}."
+    },
+    "call_status_query_failed": {
+      "message": "Could not query 2N call status before hangup: {error}"
+    },
+    "hangup_partial_failure": {
+      "message": "Failed to hang up call session(s) {sessions}."
+    },
+    "invalid_hangup_reason": {
+      "message": "Invalid hangup reason '{reason}'. Valid values: {valid}."
+    }
+  },
+  "services": {
+    "answer_call": {
+      "name": "Answer call",
+      "description": "Answer the active 2N Intercom call session or a specific session.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry ID",
+          "description": "Target a specific 2N Intercom config entry when more than one is loaded."
+        },
+        "session_id": {
+          "name": "Session ID",
+          "description": "Override the active call session to answer."
+        }
+      }
+    },
+    "hangup_call": {
+      "name": "Hang up call",
+      "description": "Hang up the active 2N Intercom call session or a specific session.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Config entry ID",
+          "description": "Target a specific 2N Intercom config entry when more than one is loaded."
+        },
+        "session_id": {
+          "name": "Session ID",
+          "description": "Override the active call session to hang up."
+        },
+        "reason": {
+          "name": "Reason",
+          "description": "Hangup reason sent to the device."
+        }
       }
     }
   }

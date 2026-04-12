@@ -1,293 +1,333 @@
 # ha-2N-intercom
 
-Home Assistant custom integration for 2N IP Intercom systems with comprehensive features and HomeKit support.
+Home Assistant custom integration for 2N IP Intercom systems with camera, doorbell, relay, call control, and HomeKit support.
+
+## Supported Devices
+
+| Device | Firmware | Status | Notes |
+|---|---|---|---|
+| **2N IP Verso** | 2.50.0.76.2 | **Verified** | Tested with and without RTSP license. Primary development target. |
+| **2N IP Verso 2.0** | 2.50.x | **Expected to work** | Same API as Verso; untested in this fork |
+| **2N IP Solo** | 2.50.x | **Expected to work** | Single-button variant; same HTTP API family |
+| **2N IP Base** | 2.50.x | **Expected to work** | Same HTTP API family |
+| **2N IP Style** | 2.50.x | **Expected to work** | Same HTTP API family |
+| **2N IP Force** | 2.50.x | **Expected to work** | Same HTTP API family |
+| **2N IP Safety** | 2.50.x | **Untested** | Same API but may lack camera |
+| **2N IP Audio** | 2.50.x | **Untested** | No camera module |
+| Older 2N devices | < 2.40 | **Not supported** | Different API surface |
+| Non-2N intercoms | — | **Not supported** | 2N HTTP API only |
+
+"Expected to work" means the device uses the same `/api/` HTTP API family as the verified target and should function correctly, but has not been tested by the maintainers. If you run one of these devices and can confirm or deny, please open an issue.
 
 ## Features
 
-### 🎥 Camera
-- **Live RTSP video streaming** with H.264 codec
-- **Snapshot support** via 2N HTTP API
-- **HomeKit-compatible** video streaming
+### Camera
+- **JPEG snapshot** via `/api/camera/snapshot`
+- **Native MJPEG live view** via `/api/camera/snapshot?...&fps=<n>` — served through Home Assistant's `MjpegCamera`, no ffmpeg/HLS round-trip
+- **RTSP stream source** when the device exposes it — requires separate RTSP credentials configured in the options flow (the 2N RTSP server has its own user database independent of the HTTP API accounts)
+- **Credentials are passed to `MjpegCamera` separately** — they never appear in the URL exposed to logs, diagnostics, or dashboards
+- HomeKit-compatible video doorbell
 
-### 🔔 Doorbell
-- **Ring event detection** from call status API
-- **Binary sensor** with proper doorbell device class
-- **Caller information** attributes (name, number, button)
-- **HomeKit doorbell** notifications
-- Event timestamps and call state tracking
+### Doorbell and call lifecycle
+- **Event-driven ring detection** via `/api/log/subscribe` + `/api/log/pull` background loop with automatic re-subscribe and exponential backoff
+- **Event-driven state updates** for switches, IO, SIP registration, and device config changes via the same subscription channel
+- Binary sensor with caller name/number/button attributes
+- **`2n_intercom.answer_call`** and **`2n_intercom.hangup_call`** services that target a config entry and (optionally) a specific session id, with `reason` selector (`normal`/`rejected`/`busy`)
+- Diagnostic sensors: SIP registration status, call state with `active_session_id` attribute
 
-### 🚪 Door/Gate Control
-- **Switch entities** for doors (momentary relay action)
-- **Cover entities** for gates (garage door opener style)
-- **Multiple relay support** (up to 4 relays)
-- **Configurable pulse duration** for each relay
-- **HomeKit integration** with proper accessory types
-  - Doors: Exposed as switches or locks
-  - Gates: Exposed as garage door openers
+### Door / Gate / Relay control
+- **Switch** entities for door relays (momentary)
+- **Cover** entities for gate relays (garage-door style)
+- Relays auto-discovered from `/api/switch/caps` — configurable pulse duration and per-relay name via options flow
+- Relay/input states are read from the device (`switch/status`, `io/status`), not optimistic
+- HomeKit accessory mapping per relay type
 
-### ⚙️ Configuration
-- **Full UI-based configuration** (no YAML required)
-- **Multi-step setup wizard**:
-  1. Connection settings (IP, port, protocol, credentials)
-  2. Device features (camera, doorbell)
-  3. Relay configuration (per-relay device type and settings)
-- **Options flow** for changing settings without re-setup
-- **Credential validation** during setup
+### Configuration
+- UI-driven two-step setup (connection → device). Protocol and port are auto-detected (HTTPS:443 first, then HTTP:80)
+- **Reauth flow** — when credentials are rejected the integration raises `ConfigEntryAuthFailed`, so HA opens a notification asking the user to re-enter credentials instead of looping on `ConfigEntryNotReady`
+- **Reconfigure flow** — change host/port/protocol/credentials/SSL without removing the entry (HA 2024.10+)
+- **Options flow** — device features, polling interval, camera transport, and per-relay overrides (name, type, pulse duration). Relays are auto-detected from the device
+- Optional "Ringing account (peer)" filter for multi-button setups (`All calls` matches every button)
 
-### 🏠 HomeKit Bridge Support
-- Automatic device classification
-- Camera with doorbell button
-- Lock or garage door opener based on configuration
-- Natural Siri voice commands
+## Capability Matrix
+
+| Category | Status | Notes |
+|---|---|---|
+| **Done** | JPEG snapshot, native MJPEG live view, RTSP stream source (when licensed), event-driven ring/switch/IO/phone/config state, backup polling safety net, relay switch/cover control with real device state, SIP/call diagnostic sensors, answer/hangup services, reauth and reconfigure flows, HomeKit bridge mapping | All verified against 2N IP Verso 2.50.0.76.2 |
+| **Out of fork scope** | Two-way audio, multi-tenant directory UX, keypad workflow, lift control, mass-notify | Not needed for a single-family-house deployment |
+| **License-dependent** | Automation API, Audio Test, NFC, Noise Detection, SMTP, FTP, SNMP, TR069, Lift Control | Only available when the device license exposes them; not planned in this fork |
+
+### Camera Support Baseline
+
+Verified on a 2N IP Verso with firmware `2.50.0.76.2`:
+
+- RTSP server license: `NO`
+- JPEG snapshot works without `fps`
+- MJPEG works via `/api/camera/snapshot?...&fps=<n>` over both HTTP and HTTPS
+- Valid `fps` values are **`1..15`** (`fps >= 16` returns API error code `12`)
+- Resolutions are taken from `camera/caps`. Observed values include
+  `176x144`, `320x240`, `352x288`, `640x480`, `800x600`, `1280x960`, `160x120`, `352x272`, `480x272`, `1024x600`, `1280x720`, `640x360`
+
+Helper: [`api.validate_mjpeg_fps`](custom_components/2n_intercom/api.py).
+
+### Authentication
+
+The 2N HTTP API exposes a **per-service-group** authentication setting in the device web UI under **Services → HTTP API**. Each service group (Camera, Switch, I/O, Phone, Call, Log, …) can be set to **None / Basic / Digest** independently, so a single account can end up answering some endpoint families with Basic and others with Digest depending on how the operator has configured the device.
+
+The integration handles every combination transparently:
+
+- The HTTP client uses `aiohttp`'s `DigestAuthMiddleware` (with `preemptive=False`) so it answers Digest challenges automatically.
+- When the device answers a request with `401 + WWW-Authenticate: Basic`, the client retries the same request with Basic auth.
+
+The same username and password must work for every service group the integration touches. **Don't try to "simplify" `_async_request`** by hard-coding one scheme — the dual-auth path exists exactly because the device exposes the choice per service group.
+
+#### RTSP authentication
+
+The 2N RTSP server has its **own user database**, completely independent of the HTTP API accounts. RTSP credentials are configured on the device under **Services → Streaming → RTSP Server → User Database**. There is no fallback from HTTP API credentials to RTSP credentials — they are separate systems.
+
+The integration provides optional **RTSP Username** and **RTSP Password** fields in the camera options step. When configured:
+
+- The RTSP probe performs a full Digest authentication handshake (unauthenticated OPTIONS → 401 challenge → authenticated OPTIONS) to validate that the credentials actually work before marking RTSP as available.
+- RTSP URLs embed the credentials for the HA stream worker (`rtsp://user:pass@host:554/h264_stream`). Special characters in credentials are URL-encoded.
+- Without RTSP credentials, the integration will not attempt RTSP even if the device has a valid RTSP license — it falls back to MJPEG.
 
 ## Architecture
 
-This integration uses modern Home Assistant best practices:
-
-- **DataUpdateCoordinator** for centralized polling and state management
-- **Async-first** implementation with aiohttp
-- **Platform-based** architecture (camera, binary_sensor, switch, cover, lock)
-- **Proper error handling** and automatic reconnection
-- **Backward compatibility** with legacy lock entity
-
-For detailed architecture information, see [ARCHITECTURE.md](ARCHITECTURE.md).
+- **DataUpdateCoordinator** centralises polling, caching, and the background log listener
+- **MJPEG-first camera** built on `homeassistant.components.mjpeg.MjpegCamera`
+- **Event-driven + backup polling** — real-time state via log subscriptions; low-frequency polling (default 60 s) as a safety net
+- **`TwoNIntercomEntity`** base class shared by all platforms — single source for `device_info`, `available`, and `_attr_has_entity_name`
+- Platform-based: `camera`, `binary_sensor`, `switch`, `cover`, `sensor`
 
 ## Manual
 
 - Install and setup: [INSTALLATION.md](INSTALLATION.md)
 - HomeKit details: [HOMEKIT_INTEGRATION.md](HOMEKIT_INTEGRATION.md)
-- Quick reference: [QUICK_REFERENCE.md](QUICK_REFERENCE.md)
+- Implementation overview: [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)
 - Release notes: [CHANGELOG.md](CHANGELOG.md)
 
 ## Installation
 
-### HACS (Recommended)
+### HACS (recommended)
 
-1. Open HACS in Home Assistant
-2. Go to "Integrations"
-3. Click the three dots in the top right corner
-4. Select "Custom repositories"
-5. Add `https://github.com/mastalir1980/ha-2N-intercom` as an integration
-6. Install "2N Intercom"
-7. Restart Home Assistant
+1. Open HACS → Integrations
+2. Three-dot menu → Custom repositories
+3. Add `https://github.com/savek-cc/ha-2N-intercom` as an integration
+4. Install **2N Intercom**
+5. Restart Home Assistant
 
-### Manual Installation
+### Manual installation
 
-1. Copy the `custom_components/2n_intercom` directory to your Home Assistant `config/custom_components/` directory
+1. Copy `custom_components/2n_intercom` into your HA `config/custom_components/`
 2. Restart Home Assistant
-3. Go to Configuration → Integrations
-4. Click the "+ Add Integration" button
-5. Search for "2N Intercom"
+3. Settings → Devices & Services → **+ Add Integration** → 2N Intercom
+
+### Removing the integration
+
+1. Settings → Devices & Services → 2N Intercom
+2. Click the three-dot menu (⋮) on the integration card → **Delete**
+3. Confirm the removal
+
+All entities, devices, and automation references created by this integration are removed immediately. No restart is required. If you installed via HACS, you can also uninstall the repository entry from HACS → Integrations afterwards to stop receiving update notifications.
+
+### Reconfiguring or re-authenticating
+
+- **Reconfigure**: Settings → Devices & Services → 2N Intercom → ⋮ → **Reconfigure**. Lets you change host/port/protocol/credentials without removing the entry.
+- **Reauth**: triggered automatically when the device starts rejecting credentials. HA shows a notification — click it to re-enter the password.
 
 ## Configuration
 
-### Initial Setup
+### Initial setup
 
-1. **Connection Settings**
-   - IP Address: Your 2N intercom IP address
-   - Port: HTTP port (default: 80) or HTTPS port (default: 443)
-   - Protocol: HTTP or HTTPS
-   - Username: 2N intercom username
-   - Password: 2N intercom password
-   - Verify SSL: Enable SSL certificate verification (HTTPS only)
+The setup wizard has two steps:
 
-2. **Device Features**
-   - Name: Device name (default: "2N Intercom")
-   - Enable Camera: Enable camera platform
-   - Enable Doorbell: Enable doorbell binary sensor
-   - Number of Relays: Select 0-4 relays to configure
-  - Ringing account (peer): Optional filter for multi-button setups (All calls = every button)
+1. **Connection** — host, username, password. Protocol (HTTPS/HTTP) and port (443/80) are auto-detected
+2. **Device** — display name, enable camera, enable doorbell, optional ringing account (peer)
 
-3. **Relay Configuration** (for each relay)
-   - Relay Name: Display name (e.g., "Front Door", "Garden Gate")
-   - Relay Number: Physical relay number (1-4)
-   - Device Type: 
-     - **Door**: Creates switch entity (momentary action)
-     - **Gate**: Creates cover entity (garage door style)
-   - Pulse Duration: How long to activate relay (milliseconds)
-     - Door default: 2000ms (2 seconds)
-     - Gate default: 15000ms (15 seconds)
+Relays are **not** configured during initial setup. The integration auto-discovers enabled relays from the device's `/api/switch/caps` endpoint and creates switch entities automatically. To override relay names, types (door/gate), or pulse durations, open the **Options** flow after setup.
 
-### Example Configurations
+### Initial setup parameters
 
-#### Apartment Building (Door Only)
+| Step | Parameter | Type | Default | Description |
+|---|---|---|---|---|
+| Connection | `host` | string | *(required)* | IP address or hostname of the intercom |
+| Connection | `username` | string | *(required)* | Device API username |
+| Connection | `password` | string | *(required)* | Device API password |
+| Device | `name` | string | *(auto-detected)* | Display name in Home Assistant |
+| Device | `enable_camera` | bool | `true` | Create the camera entity |
+| Device | `enable_doorbell` | bool | `true` | Create the doorbell binary sensor |
+| Device | `called_id` | string | `All calls` | Ringing account / peer filter |
+
+### Options flow parameters
+
+After initial setup, open the integration's **Options** (Settings → Devices & Services → 2N Intercom → **Configure**) to change behavioral settings without removing the entry. Connection settings are changed through the **Reconfigure** flow instead.
+
+The options flow has up to three steps:
+
+1. **Device** — name, feature toggles, backup polling interval, ringing account
+2. **Camera** *(only when camera is enabled)* — live view mode, RTSP credentials, MJPEG resolution/fps, camera source
+3. **Relay** *(one per auto-detected relay)* — name, device type (door/gate), pulse duration
+
+| Step | Parameter | Type | Default | Description |
+|---|---|---|---|---|
+| Device | `name` | string | *(from setup)* | Display name |
+| Device | `enable_camera` | bool | `true` | Toggle camera entity |
+| Device | `enable_doorbell` | bool | `true` | Toggle doorbell entity |
+| Device | `scan_interval` | 2-600 (s) | 60 | Backup polling interval. Events deliver real-time updates; polling only runs as a safety net |
+| Device | `called_id` | string | `All calls` | Ringing account / peer filter |
+| Camera | `live_view_mode` | `auto` \| `rtsp` \| `mjpeg` \| `jpeg_only` | `auto` | Camera live view transport. `auto` picks RTSP if licensed and RTSP credentials are set, then MJPEG, then snapshots |
+| Camera | `rtsp_username` | string | *(empty)* | RTSP server username (from the 2N RTSP user database, **not** the HTTP API account) |
+| Camera | `rtsp_password` | string | *(empty)* | RTSP server password |
+| Camera | `camera_source` | `internal` \| `external` | `internal` | Which camera sensor to stream (external = secondary module) |
+| Camera | `mjpeg_width` | 160-2592 (px) | 1280 | MJPEG stream width |
+| Camera | `mjpeg_height` | 160-2592 (px) | 960 | MJPEG stream height |
+| Camera | `mjpeg_fps` | 1-15 | 10 | MJPEG frame rate. Lower values reduce bandwidth |
+| Relay | `relay_name` | string | `Relay N` | Display name for this relay |
+| Relay | `relay_device_type` | `door` \| `gate` | `door` | Door → switch entity, Gate → cover entity |
+| Relay | `relay_pulse_duration` | int (ms) | *(from device)* | How long the relay stays triggered. Default is the device's switchOnDuration |
+
+### Example: single-family house (door + gate)
+
 ```
-Connection:
-  - IP: 192.168.1.100
-  - Port: 80
-  - Protocol: HTTP
-  - Username: admin
-  - Password: ****
+Initial setup:
+  Host: 192.0.2.20
+  Username: homeassistant
+  Password: ****
+  → auto-detects HTTPS:443
 
-Device:
-  - Name: Building Entrance
-  - Enable Camera: Yes
-  - Enable Doorbell: Yes
-  - Number of Relays: 1
+  Name: Home Intercom
+  Camera: yes
+  Doorbell: yes
 
-Relay 1:
-  - Name: Entrance Door
-  - Number: 1
-  - Type: Door
-  - Duration: 2000ms
-```
-
-Result:
-- `camera.building_entrance_camera` - Live stream and snapshots
-- `binary_sensor.building_entrance_doorbell` - Ring events
-- `switch.building_entrance_entrance_door` - Door unlock
-
-#### Private House (Door + Gate)
-```
-Connection:
-  - IP: 192.168.1.101
-  - Protocol: HTTPS
-  - Username: admin
-  - Password: ****
-
-Device:
-  - Name: Home Intercom
-  - Enable Camera: Yes
-  - Enable Doorbell: Yes
-  - Number of Relays: 2
-
-Relay 1:
-  - Name: Front Door
-  - Number: 1
-  - Type: Door
-  - Duration: 2000ms
-
-Relay 2:
-  - Name: Driveway Gate
-  - Number: 2
-  - Type: Gate
-  - Duration: 15000ms
+Options flow (after setup):
+  Relay 1 → Front Door, door, 2000 ms
+  Relay 2 → Driveway Gate, gate, 15000 ms
 ```
 
-Result:
+Resulting entities:
+
 - `camera.home_intercom_camera`
 - `binary_sensor.home_intercom_doorbell`
+- `binary_sensor.home_intercom_input_1` *(real device input)*
+- `binary_sensor.home_intercom_relay_1_active` *(real cached relay state)*
+- `sensor.home_intercom_sip_registration`
+- `sensor.home_intercom_call_state` *(attribute: `active_session_id`)*
 - `switch.home_intercom_front_door`
 - `cover.home_intercom_driveway_gate`
 
-## 2N API Endpoints Used
+## Services
 
-| Endpoint | Purpose | Platform |
-|----------|---------|----------|
-| `/api/call/status` | Monitor doorbell rings and call state | binary_sensor |
-| `/api/dir/query` | Get caller directory information | binary_sensor |
-| `/api/switch/ctrl` | Control relays (open door/gate) | switch, cover |
-| `/api/camera/snapshot` | Get JPEG snapshot | camera |
-| RTSP stream | Live video streaming | camera |
+| Service | Purpose |
+|---|---|
+| `2n_intercom.answer_call` | Answer the active call session (or a specific `session_id`) |
+| `2n_intercom.hangup_call` | Hang up the active call session (or a specific `session_id`) with optional `reason` (`normal` / `rejected` / `busy`) |
 
-## HomeKit Integration
+Both services target a config entry. From the UI use the **Target → Integration** picker; from YAML use `data.config_entry_id`. Pair `hangup_call` with `sensor.<intercom>_call_state`'s `active_session_id` attribute to terminate the exact session that triggered an automation.
 
-### Setup
-
-1. Ensure Home Assistant HomeKit Bridge is configured
-2. Add the 2N Intercom integration
-3. Link the doorbell sensor to the camera (YAML only)
+Example actionable-notification snippet:
 
 ```yaml
-homekit:
-  - name: 2N Intercom Doorbell
-    port: 21065
-    filter:
-      include_entities:
-        - camera.2n_intercom_camera
-    entity_config:
-      camera.2n_intercom_camera:
-        linked_doorbell_sensor: binary_sensor.2n_intercom_doorbell
+- service: 2n_intercom.hangup_call
+  data:
+    session_id: "{{ state_attr('sensor.home_intercom_call_state', 'active_session_id') }}"
+    reason: normal
 ```
 
-Notes:
-- Do not include `binary_sensor.*_doorbell` in the filter.
-- Do not include the camera or doorbell in any other HomeKit bridge.
-- After YAML change, restart HA and re-add the HomeKit bridge in the Home app.
+## Automation Examples
 
-### Accessory Types
+### Blueprint: Doorbell notification with answer/hangup
 
-- **Camera** → Video Doorbell (if doorbell enabled)
-- **Binary Sensor** → Linked to camera via `linked_doorbell_sensor`
-- **Switch (Door)** → Switch or Lock accessory
-- **Cover (Gate)** → Garage Door Opener accessory
+A ready-to-use blueprint is included at [`blueprints/doorbell_notification_answer_hangup.yaml`](blueprints/doorbell_notification_answer_hangup.yaml). It sends a mobile notification with a camera snapshot and action buttons to answer or hang up the call when the doorbell rings.
 
-### Siri Commands
+To import:
 
-**Camera:**
-- "Show me the front door camera"
-- "What does the camera see?"
+1. Copy the YAML file into your `config/blueprints/automation/2n_intercom/` directory
+2. Reload automations
+3. Create a new automation from the blueprint and fill in your entities
 
-**Doorbell:**
-- Ring events appear as HomeKit notifications
+### Quick YAML example: open door on doorbell
 
-**Door (Switch):**
-- "Turn on the front door" (triggers relay)
-- "Open the front door"
+```yaml
+automation:
+  - alias: "Auto-open door on ring"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.home_intercom_doorbell
+        to: "on"
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.home_intercom_relay_1
+```
 
-**Gate (Cover):**
-- "Open the driveway gate"
-- "Close the driveway gate"
-- "Is the gate open?"
+## 2N API Endpoints Used
+
+The integration negotiates Basic vs Digest per request — see the **Authentication** section above.
+
+| Endpoint | Purpose |
+|---|---|
+| `/api/system/info` | Device identity |
+| `/api/call/status` | Baseline call state (safety-net poll) |
+| `/api/call/answer`, `/api/call/hangup` | Service backends |
+| `/api/log/subscribe`, `/api/log/pull`, `/api/log/unsubscribe` | Push-driven event stream |
+| `/api/switch/caps`, `/api/switch/status`, `/api/switch/ctrl` | Relay control + cached state |
+| `/api/io/caps`, `/api/io/status` | Cached input state |
+| `/api/phone/status` | SIP registration sensor |
+| `/api/camera/caps` | Discover MJPEG capability + resolutions |
+| `/api/camera/snapshot` (with/without `fps`) | JPEG snapshot + MJPEG live view |
+| RTSP stream | Optional, only when the device licence exposes it |
+
+## Data Updates
+
+The integration uses two data channels:
+
+- **Event subscriptions (primary)** — `/api/log/subscribe` + `/api/log/pull` long-poll loop. Subscribes to `CallStateChanged`, `CallSessionStateChanged`, `SwitchStateChanged`, `InputChanged`, `OutputChanged`, `RegistrationStateChanged`, `ConfigurationChanged`, `CapabilitiesChanged`, `DeviceState`, and (when available) `MotionDetected`. State changes arrive within ~1 second. The listener auto-resubscribes with exponential backoff on failures and forces a full baseline refresh after each reconnect
+- **Backup polling (safety net)** — the coordinator polls status endpoints (`switch/status`, `io/status`, `phone/status`, `call/status`, `switch/caps`) at the configured interval (default 60 seconds). This catches any events missed during subscription gaps but does not perform ring detection — ring detection is exclusively event-driven
+- **Static caps** — `switch/caps`, `io/caps`, and camera transport info are fetched once at setup and cached. Switch caps are also refreshed on `ConfigurationChanged` / `CapabilitiesChanged` events and on every poll cycle as a safety net
+
+## Use Cases
+
+- **Video doorbell** — camera snapshot + event-driven ring notification via mobile app
+- **Door opening** — trigger relay via switch entity from automations, dashboards, or HomeKit
+- **Gate control** — garage-door-style open/close via cover entity
+- **Call management** — answer or reject incoming calls from automations using the `answer_call` / `hangup_call` services
+- **Multi-button setups** — filter doorbell events by ringing account (peer) to distinguish front door from side entrance
+- **HomeKit bridge** — expose camera as video doorbell, relays as switches/garage doors in Apple Home
+
+## Known Limitations
+
+- **No two-way audio** — the HA camera platform does not support bi-directional audio; the doorbell ring triggers notifications but audio is device-side only
+- **RTSP requires a separate license** — the 2N RTSP server is a paid feature; without it, only MJPEG streaming is available
+- **RTSP credentials are independent** — the RTSP server has its own user database; HTTP API credentials do not work for RTSP
+- **No gate position feedback** — the IP Verso has no gate-position sensor; cover entities use optimistic state transitions
+- **Single camera source** — only one camera source (internal or external) can be active per config entry
+- **Firmware < 2.40 unsupported** — older firmware versions use a different API surface
 
 ## Troubleshooting
 
-### Cannot Connect Error
+### Cannot Connect during setup
+- Verify IP/port/credentials and protocol; firewall; SSL trust if HTTPS
+- The same username and password must be valid for **both** Basic and Digest auth on the device — if the device rejects one of the schemes, every endpoint that uses it will fail. Configure the account under **Services → HTTP API → Account** on the 2N web UI
 
-**Symptoms:** "Failed to connect to the device" during setup
+### Camera entity has no live view
+- Confirm `camera/caps` returns `mjpeg.fps_min`/`fps_max` (the integration's transport probe runs once at setup; reload the entry after changing camera caps on the device)
+- Open the entity attributes — `live_view_selected_mode` should be `mjpeg`, `mjpeg_available` should be `true`
 
-**Solutions:**
-1. Verify IP address and port are correct
-2. Check network connectivity to intercom
-3. Verify username and password
-4. Try HTTP instead of HTTPS if SSL verification fails
-5. Check firewall rules
+### RTSP stream not working
+- Make sure the RTSP server licence is enabled on the device
+- Configure RTSP credentials in the integration's options flow (Settings → Devices & Services → 2N Intercom → Configure → Camera step). The RTSP server has its own user database — HTTP API credentials do **not** work for RTSP
+- Create an RTSP user on the device: **Services → Streaming → RTSP Server → User Database**
+- The entity attributes should show `rtsp_available: true` and `live_view_selected_mode: rtsp` when RTSP is working
+- If RTSP credentials are wrong, the integration logs a warning and falls back to MJPEG
 
-### Camera Not Streaming
+### Doorbell not triggering
+- Ring detection is exclusively event-driven via the log subscription — there is no polling fallback for ring events
+- Open the integration's diagnostics; the log subscription id should be set
+- Press the button and watch HA logs — the event path should flip the binary sensor within ~1 s
+- If the subscription is down, the listener retries with exponential backoff (up to ~60 s). Ring events during a subscription gap are lost
 
-**Symptoms:** Camera entity exists but no video
-
-**Solutions:**
-1. Verify RTSP stream is enabled on 2N intercom
-2. Test RTSP URL manually: `rtsp://username:password@ip:554/h264_stream`
-3. Check Home Assistant logs for stream errors
-
-### Doorbell Not Triggering
-
-**Symptoms:** Binary sensor not changing to "on" when doorbell rings
-
-**Solutions:**
-1. Verify doorbell is enabled in configuration
-2. Check coordinator polling interval (default: 5 seconds)
-3. Verify `/api/call/status` returns "ringing" state during ring
-4. Check Home Assistant logs for API errors
-
-### Relay Not Working
-
-**Symptoms:** Switch/cover doesn't control relay
-
-**Solutions:**
-1. Verify relay number is correct (1-4)
-2. Check relay is configured and enabled on 2N intercom
-3. Test relay via 2N web interface
-4. Verify credentials have permission to control relays
-5. Check Home Assistant logs for API errors
-
-### HomeKit Not Showing Entities
-
-**Doorbell appears as occupancy sensor:**
-1. Remove `binary_sensor.*_doorbell` from HomeKit filter.
-2. Link doorbell to camera via `linked_doorbell_sensor` (see setup above).
-3. Ensure the camera and doorbell are not present in any other HomeKit bridge.
-4. Restart Home Assistant and re-add the HomeKit bridge in the Home app.
-
-**Symptoms:** Entities visible in HA but not in Home app
-
-**Solutions:**
-1. Verify HomeKit Bridge is running
-2. Check HomeKit Bridge includes the entities
-3. Reset HomeKit Bridge and re-pair
-4. Check entity is not in "unavailable" state
+### Reauth notification keeps appearing
+- Credentials really are wrong, or the device locked the account. Check the 2N web UI under **Services → HTTP API → Account** and re-enter the password through the reauth flow
 
 ## Development
 
@@ -295,69 +335,47 @@ Notes:
 
 ```
 custom_components/2n_intercom/
-├── __init__.py              # Integration setup
-├── api.py                   # 2N API client
-├── coordinator.py           # DataUpdateCoordinator
-├── config_flow.py           # Configuration UI
+├── __init__.py              # Integration setup, services, listener lifecycle
+├── api.py                   # 2N API client (Basic + Digest auth)
+├── coordinator.py           # DataUpdateCoordinator + push log loop
+├── config_flow.py           # User / reauth / reconfigure / options flows
 ├── const.py                 # Constants
-├── camera.py                # Camera platform
-├── binary_sensor.py         # Doorbell platform
+├── entity.py                # Shared TwoNIntercomEntity base
+├── camera.py                # MjpegCamera-based camera platform
+├── binary_sensor.py         # Doorbell + input + relay-active sensors
+├── sensor.py                # SIP registration + call state diagnostic sensors
 ├── switch.py                # Door relay platform
 ├── cover.py                 # Gate relay platform
-├── lock.py                  # Legacy lock platform
-├── manifest.json            # Integration metadata
-├── strings.json             # UI strings
+├── manifest.json
+├── services.yaml
+├── strings.json
+├── icons.json
 └── translations/
-    ├── en.json              # English
-    └── cs.json              # Czech
+    ├── en.json
+    ├── de.json
+    └── cs.json
 ```
 
-### Testing
+### Tests
 
-To test the integration:
-
-1. Install in development mode
-2. Check Home Assistant logs for any errors
-3. Test all features (camera, doorbell, relays)
-
-### Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+```bash
+python3 -m unittest discover -s tests -t tests   # 442/442
+python3 validate.py                               # manifest + HACS compliance
+python3 -m py_compile custom_components/2n_intercom/*.py
+```
 
 ## Version History
 
-### 1.0.1 (Current)
-- Fix HomeKit entity exposure when relays are configured
-- Ensure relay entities load from options
-
-### 1.0.0
-- Initial public release
-- Camera platform with RTSP streaming
-- Doorbell binary sensor
-- Switch platform for doors
-- Cover platform for gates
-- DataUpdateCoordinator-based polling
-- Full config flow with multi-step wizard
-- HomeKit support
+See [CHANGELOG.md](CHANGELOG.md) for the full release notes.
 
 ## License
 
-This project is open source. See [LICENSE](LICENSE).
+See [LICENSE](LICENSE).
 
 ## Credits
 
-Created for the Home Assistant community
-Developed by: mastalir1980
+Originally created by [mastalir1980](https://github.com/mastalir1980/ha-2N-intercom) for the Home Assistant community. The HA 2026.4+ remediation, MJPEG-first camera, push-driven event handling, real-state status entities, answer/hangup services, and dual-auth client live in this [savek-cc](https://github.com/savek-cc/ha-2N-intercom) fork.
 
 ## Support
 
-For issues, questions, or feature requests, please:
-- Open an issue on GitHub
-- Check existing documentation
-- Review troubleshooting section
+Open an issue on the [savek-cc fork](https://github.com/savek-cc/ha-2N-intercom/issues).
