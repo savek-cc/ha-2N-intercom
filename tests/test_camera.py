@@ -267,7 +267,7 @@ class CameraStreamSourceTests(unittest.IsolatedAsyncioTestCase):
                     mjpeg_available=True,
                     mjpeg_public_url_available=True,
                 ),
-                self.camera_module.CameraEntityFeature.STREAM,
+                0,
                 None,
             ),
             (

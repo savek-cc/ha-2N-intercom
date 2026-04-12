@@ -65,8 +65,16 @@ def get_stream_source_for_transport(
 def get_supported_features_for_transport(
     transport_info: CameraTransportInfo,
 ) -> CameraEntityFeature:
-    """Return the camera feature flags for the selected transport."""
-    if _transport_has_live_view(transport_info):
+    """Return the camera feature flags for the selected transport.
+
+    Only RTSP transports advertise ``STREAM`` — the HA stream component
+    (ffmpeg → HLS/WebRTC) requires a stream source URL from
+    ``stream_source()``.  MJPEG is served natively by ``MjpegCamera``
+    without ffmpeg, so advertising STREAM for it would make the frontend
+    try the stream component, get ``None`` from ``stream_source()``, and
+    fail with "does not support play stream service".
+    """
+    if transport_info.resolved and transport_info.selected_mode == LIVE_VIEW_MODE_RTSP:
         return CameraEntityFeature.STREAM
     return CameraEntityFeature(0)
 
@@ -149,6 +157,10 @@ class TwoNIntercomCamera(
 
         self._config_entry = config_entry
         self._transport_info = transport_info
+        # Set frame interval from configured MJPEG FPS so the still-stream
+        # approach produces a comparable frame rate to a native MJPEG proxy.
+        if transport_info.mjpeg_fps and transport_info.mjpeg_fps > 0:
+            self._attr_frame_interval = 1.0 / transport_info.mjpeg_fps
 
     @property
     def device_info(self) -> dict[str, Any]:
@@ -207,6 +219,21 @@ class TwoNIntercomCamera(
                 for resolution in transport_info.capabilities.jpeg_resolutions
             ],
         }
+
+    async def handle_async_mjpeg_stream(self, request: Any) -> Any:
+        """Generate MJPEG stream from repeated snapshots.
+
+        ``MjpegCamera`` would normally proxy the raw MJPEG stream from the
+        device. That fails when a reverse proxy (e.g. Caddy, nginx) buffers
+        the ``multipart/x-mixed-replace`` response — the browser receives
+        headers but zero content bytes. Instead we let HA compose its own
+        MJPEG boundary stream by polling ``async_camera_image()`` (which
+        reads from the coordinator's snapshot cache). This works reliably
+        through any proxy or HTTP version.
+        """
+        return await self.handle_async_still_stream(
+            request, self.frame_interval
+        )
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
