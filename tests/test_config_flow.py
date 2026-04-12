@@ -332,22 +332,19 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = self._make_flow()
         result = await flow.async_step_user(
             {
-                "host": "192.168.2.20",
-                "port": 443,
-                "protocol": "https",
+                "host": "192.0.2.20",
                 "username": "homeassistant",
                 "password": "secret",
-                "verify_ssl": False,
             }
         )
         # Successful auth advances to the device step (form, not error).
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "device")
         self.assertEqual(result["errors"], {})
-        # User step creates one API for the connection test; the device
-        # step then creates another to fetch the directory peers. The
-        # invariant we care about is that *every* API the flow opens is
-        # also closed — no resource leaks regardless of step count.
+        # Auto-detect stores the discovered protocol/port in _data.
+        self.assertEqual(flow._data["protocol"], "https")
+        self.assertEqual(flow._data["port"], 443)
+        # Every API the flow opens is also closed — no resource leaks.
         self.assertGreaterEqual(len(FakeAPI.instances), 1)
         self.assertTrue(all(instance.closed for instance in FakeAPI.instances))
 
@@ -356,12 +353,9 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         flow = self._make_flow()
         result = await flow.async_step_user(
             {
-                "host": "192.168.2.20",
-                "port": 443,
-                "protocol": "https",
+                "host": "192.0.2.20",
                 "username": "homeassistant",
                 "password": "wrong",
-                "verify_ssl": False,
             }
         )
         self.assertEqual(result["type"], "form")
@@ -374,7 +368,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         entry = FakeConfigEntry(
             "entry-1",
             {
-                "host": "192.168.2.20",
+                "host": "192.0.2.20",
                 "port": 443,
                 "protocol": "https",
                 "username": "homeassistant",
@@ -394,7 +388,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         # The flow exposes the host as a description placeholder so the user
         # knows which device they're updating credentials for.
         self.assertEqual(
-            first["description_placeholders"].get("host"), "192.168.2.20"
+            first["description_placeholders"].get("host"), "192.0.2.20"
         )
 
         # Submit valid creds → entry is updated, reload kicked off, aborted
@@ -410,7 +404,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 (
                     "entry-1",
                     {
-                        "host": "192.168.2.20",
+                        "host": "192.0.2.20",
                         "port": 443,
                         "protocol": "https",
                         "username": "homeassistant",
@@ -429,7 +423,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         entry = FakeConfigEntry(
             "entry-1",
             {
-                "host": "192.168.2.20",
+                "host": "192.0.2.20",
                 "port": 443,
                 "protocol": "https",
                 "username": "homeassistant",
@@ -457,7 +451,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         entry = FakeConfigEntry(
             "entry-1",
             {
-                "host": "192.168.2.20",
+                "host": "192.0.2.20",
                 "port": 443,
                 "protocol": "https",
                 "username": "homeassistant",
@@ -477,7 +471,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         # Submit a changed host; flow validates and updates the entry.
         result = await flow.async_step_reconfigure(
             {
-                "host": "192.168.2.21",
+                "host": "192.0.2.21",
                 "port": 443,
                 "protocol": "https",
                 "username": "homeassistant",
@@ -490,7 +484,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(hass.config_entries.update_calls), 1)
         updated_entry_id, updated_data = hass.config_entries.update_calls[0]
         self.assertEqual(updated_entry_id, "entry-1")
-        self.assertEqual(updated_data["host"], "192.168.2.21")
+        self.assertEqual(updated_data["host"], "192.0.2.21")
         self.assertEqual(hass.config_entries.reload_calls, ["entry-1"])
 
     async def test_reconfigure_with_failed_connection_does_not_update(
@@ -500,7 +494,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         entry = FakeConfigEntry(
             "entry-1",
             {
-                "host": "192.168.2.20",
+                "host": "192.0.2.20",
                 "port": 443,
                 "protocol": "https",
                 "username": "homeassistant",
@@ -515,7 +509,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         await flow.async_step_reconfigure(None)
         result = await flow.async_step_reconfigure(
             {
-                "host": "192.168.2.99",
+                "host": "192.0.2.99",
                 "port": 443,
                 "protocol": "https",
                 "username": "homeassistant",
@@ -553,7 +547,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(result["title"], "My Intercom")
 
-    async def test_device_step_with_relays_advances_to_relay(self) -> None:
+    async def test_device_step_creates_entry_directly(self) -> None:
+        """Device step creates entry immediately — no relay steps."""
         flow = self._make_flow()
         flow._data = {
             "host": "192.0.2.20",
@@ -562,17 +557,17 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "username": "user",
             "password": "pass",
             "verify_ssl": False,
+            "serial_number": "SN-123456",
         }
         result = await flow.async_step_device(
             {
                 "name": "Intercom",
                 "enable_camera": True,
                 "enable_doorbell": True,
-                "relay_count": 1,
+                "called_id": "__all__",
             }
         )
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "relay")
+        self.assertEqual(result["type"], "create_entry")
 
     async def test_device_step_renders_form_when_no_input(self) -> None:
         flow = self._make_flow()
@@ -585,80 +580,6 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         result = await flow.async_step_device(None)
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "device")
-
-    # --- Relay step tests ---
-
-    async def test_relay_step_advances_to_relay_pulse(self) -> None:
-        flow = self._make_flow()
-        flow._data = {"relay_count": 1}
-        flow._relays = []
-        result = await flow.async_step_relay(
-            {"relay_name": "Front Door", "relay_number": 1, "relay_device_type": "door"},
-            relay_index=0,
-        )
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "relay_pulse")
-
-    async def test_relay_pulse_step_creates_entry_for_single_relay(self) -> None:
-        flow = self._make_flow()
-        flow._data = {
-            "host": "192.0.2.20",
-            "port": 443,
-            "protocol": "https",
-            "username": "user",
-            "password": "pass",
-            "verify_ssl": False,
-            "relay_count": 1,
-            "serial_number": "SN-123",
-        }
-        flow._relays = []
-        flow._pending_relay = {
-            "relay_name": "Door",
-            "relay_number": 1,
-            "relay_device_type": "door",
-        }
-        result = await flow.async_step_relay_pulse(
-            {"relay_pulse_duration": 2000}, relay_index=0
-        )
-        self.assertEqual(result["type"], "create_entry")
-
-    async def test_relay_pulse_step_advances_to_next_relay_when_more(self) -> None:
-        flow = self._make_flow()
-        flow._data = {"relay_count": 2}
-        flow._relays = []
-        flow._pending_relay = {
-            "relay_name": "Door",
-            "relay_number": 1,
-            "relay_device_type": "door",
-        }
-        result = await flow.async_step_relay_pulse(
-            {"relay_pulse_duration": 2000}, relay_index=0
-        )
-        # Should advance to relay step for relay_index=1
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "relay")
-
-    async def test_relay_renders_form_when_no_input(self) -> None:
-        flow = self._make_flow()
-        flow._data = {"relay_count": 1}
-        flow._relays = []
-        result = await flow.async_step_relay(None, relay_index=0)
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "relay")
-        self.assertEqual(result["description_placeholders"]["relay_number"], "1")
-
-    async def test_relay_pulse_renders_form_when_no_input(self) -> None:
-        flow = self._make_flow()
-        flow._data = {"relay_count": 1}
-        flow._relays = []
-        flow._pending_relay = {
-            "relay_name": "Gate",
-            "relay_number": 2,
-            "relay_device_type": "gate",
-        }
-        result = await flow.async_step_relay_pulse(None, relay_index=0)
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "relay_pulse")
 
     # --- Unique ID uses serial ---
 

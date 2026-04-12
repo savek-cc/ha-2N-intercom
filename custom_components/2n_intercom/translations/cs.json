@@ -2,65 +2,33 @@
   "config": {
     "step": {
       "user": {
-        "title": "Nastavení 2N Intercom - Připojení",
-        "description": "Nakonfigurujte připojení k vašemu zařízení 2N Intercom",
+        "title": "Nastavení 2N Intercom",
+        "description": "Zadejte IP adresu a přihlašovací údaje API vašeho 2N Intercom. Protokol připojení se detekuje automaticky.",
         "data": {
           "host": "IP adresa",
-          "port": "Port",
-          "protocol": "Protokol",
           "username": "Uživatelské jméno",
-          "password": "Heslo",
-          "verify_ssl": "Ověřit SSL certifikát"
+          "password": "Heslo"
         },
         "data_description": {
-          "host": "IP adresa nebo hostname zařízení (např. 192.168.1.100)",
-          "port": "HTTP/HTTPS port zařízení (ponechte výchozí, pokud jste nic neměnili)",
-          "protocol": "Použijte HTTP nebo HTTPS podle nastavení zařízení",
+          "host": "IP adresa nebo hostname zařízení (např. 192.0.2.100)",
           "username": "Přihlašovací jméno zařízení pro API",
-          "password": "Přihlašovací heslo zařízení",
-          "verify_ssl": "Zapněte jen pokud Home Assistant důvěřuje HTTPS certifikátu"
+          "password": "Přihlašovací heslo zařízení"
         }
       },
       "device": {
         "title": "Nastavení 2N Intercom - Zařízení",
-        "description": "Nakonfigurujte funkce zařízení",
+        "description": "Nakonfigurujte funkce zařízení. Relé lze nastavit později v možnostech integrace.",
         "data": {
           "name": "Název",
           "enable_camera": "Povolit kameru",
           "enable_doorbell": "Povolit zvonek",
-          "relay_count": "Počet relé",
           "called_id": "Volaný účet (peer)"
         },
         "data_description": {
           "name": "Zobrazený název v Home Assistant",
           "enable_camera": "Vytvoří entitu kamery pro snímky i stream",
           "enable_doorbell": "Vytvoří entitu zvonku pro detekci zvonění",
-          "relay_count": "Kolik relé chcete nastavit (0-4)",
           "called_id": "Vyberte účet, na který se zvoní. Všechny hovory = zvonění pro všechna tlačítka."
-        }
-      },
-      "relay": {
-        "title": "Nastavení 2N Intercom - Relé {relay_number}",
-        "description": "Nakonfigurujte relé {relay_number}",
-        "data": {
-          "relay_name": "Název relé",
-          "relay_number": "Číslo relé",
-          "relay_device_type": "Typ zařízení"
-        },
-        "data_description": {
-          "relay_name": "Zobrazený název relé",
-          "relay_number": "Fyzické číslo relé na zařízení (1-4)",
-          "relay_device_type": "Dveře vytvoří spínač, vrata vytvoří kryt"
-        }
-      },
-      "relay_pulse": {
-        "title": "Nastavení 2N Intercom - Puls relé {relay_number}",
-        "description": "Jak dlouho má relé {relay_number} sepnout ({device_type}). Pro dveřní zámky obvykle ~2000 ms, pro křídlová vrata ~15000 ms.",
-        "data": {
-          "relay_pulse_duration": "Doba pulsu (milisekundy)"
-        },
-        "data_description": {
-          "relay_pulse_duration": "Délka spínacího pulsu odeslaného relé (ms)"
         }
       }
     },

@@ -148,8 +148,6 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
     def __init__(self) -> None:
         """Initialize the config flow."""
         self._data: dict[str, Any] = {}
-        self._relays: list[dict[str, Any]] = []
-        self._pending_relay: dict[str, Any] | None = None
         self._integration_name: str | None = None
         self._integration_version: str | None = None
         self._reauth_entry: config_entries.ConfigEntry | None = None
@@ -176,44 +174,64 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
         """Return name unchanged (version is not appended)."""
         return name
 
+    async def _async_try_connect(
+        self, host: str, username: str, password: str,
+        protocol: str, port: int, verify_ssl: bool,
+    ) -> tuple[TwoNIntercomAPI | None, bool]:
+        """Try to connect with the given parameters. Returns (api, success)."""
+        api = TwoNIntercomAPI(
+            host=host, port=port, username=username,
+            password=password, protocol=protocol, verify_ssl=verify_ssl,
+        )
+        try:
+            if await api.async_test_connection():
+                return api, True
+        except Exception:  # pylint: disable=broad-except
+            pass
+        await api.async_close()
+        return None, False
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial step - connection settings."""
+        """Handle the initial step - connection settings.
+
+        Only asks for host, username, and password. Protocol and port are
+        auto-detected by trying HTTPS:443 first, then HTTP:80.  The user
+        can override via the reconfigure flow if the device uses a
+        non-standard combination.
+        """
         errors: dict[str, str] = {}
-        api: TwoNIntercomAPI | None = None
 
         if user_input is not None:
-            # Validate connection
+            host = user_input[CONF_HOST]
+            username = user_input[CONF_USERNAME]
+            password = user_input[CONF_PASSWORD]
+            api: TwoNIntercomAPI | None = None
+
             try:
-                # Determine port based on protocol if not specified
-                if CONF_PORT not in user_input:
-                    user_input[CONF_PORT] = (
-                        DEFAULT_PORT_HTTPS
-                        if user_input.get(CONF_PROTOCOL) == PROTOCOL_HTTPS
-                        else DEFAULT_PORT_HTTP
+                # Auto-detect: try HTTPS:443 first, then HTTP:80
+                for protocol, port in (
+                    (PROTOCOL_HTTPS, DEFAULT_PORT_HTTPS),
+                    (PROTOCOL_HTTP, DEFAULT_PORT_HTTP),
+                ):
+                    api, ok = await self._async_try_connect(
+                        host, username, password, protocol, port,
+                        verify_ssl=False,
                     )
-
-                api = TwoNIntercomAPI(
-                    host=user_input[CONF_HOST],
-                    port=user_input[CONF_PORT],
-                    username=user_input[CONF_USERNAME],
-                    password=user_input[CONF_PASSWORD],
-                    protocol=user_input.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
-                    verify_ssl=user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
-                )
-
-                # Test connection
-                if not await api.async_test_connection():
+                    if ok:
+                        user_input[CONF_PROTOCOL] = protocol
+                        user_input[CONF_PORT] = port
+                        user_input[CONF_VERIFY_SSL] = False
+                        break
+                else:
                     _LOGGER.warning(
-                        "Connection test failed host=%s port=%s protocol=%s verify_ssl=%s",
-                        user_input.get(CONF_HOST),
-                        user_input.get(CONF_PORT),
-                        user_input.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
-                        user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+                        "Auto-detect failed for host=%s (tried HTTPS:443, HTTP:80)",
+                        host,
                     )
                     errors["base"] = "cannot_connect"
-                else:
+
+                if api is not None and not errors:
                     # Fetch stable device identity for unique-id
                     try:
                         sys_info = await api.async_get_system_info()
@@ -226,16 +244,11 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
                     )
                     if serial:
                         user_input[CONF_SERIAL_NUMBER] = str(serial).strip()
-                    # Store data and move to device configuration
                     self._data = user_input
 
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception(
-                    "Connection test exception host=%s port=%s protocol=%s verify_ssl=%s",
-                    user_input.get(CONF_HOST),
-                    user_input.get(CONF_PORT),
-                    user_input.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
-                    user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+                    "Connection test exception host=%s", host,
                 )
                 errors["base"] = "cannot_connect"
             finally:
@@ -245,31 +258,11 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
             if not errors:
                 return await self.async_step_device()
 
-        # Default port based on protocol
-        default_protocol = (
-            user_input.get(CONF_PROTOCOL)
-            if user_input is not None
-            else DEFAULT_PROTOCOL
-        )
-        default_port = (
-            user_input.get(CONF_PORT)
-            if user_input is not None and CONF_PORT in user_input
-            else (
-                DEFAULT_PORT_HTTPS
-                if default_protocol == PROTOCOL_HTTPS
-                else DEFAULT_PORT_HTTP
-            )
-        )
-
         data_schema = vol.Schema(
             {
                 vol.Required(
                     CONF_HOST, default=user_input.get(CONF_HOST, "") if user_input else ""
                 ): cv.string,
-                vol.Required(CONF_PORT, default=default_port): cv.port,
-                vol.Required(CONF_PROTOCOL, default=default_protocol): vol.In(
-                    PROTOCOLS
-                ),
                 vol.Required(
                     CONF_USERNAME,
                     default=user_input.get(CONF_USERNAME, "") if user_input else "",
@@ -278,14 +271,6 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
                     CONF_PASSWORD,
                     default=user_input.get(CONF_PASSWORD, "") if user_input else "",
                 ): cv.string,
-                vol.Required(
-                    CONF_VERIFY_SSL,
-                    default=(
-                        user_input.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
-                        if user_input
-                        else DEFAULT_VERIFY_SSL
-                    ),
-                ): cv.boolean,
             }
         )
 
@@ -298,20 +283,18 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
     async def async_step_device(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle device configuration step."""
+        """Handle device configuration step.
+
+        Relays are not configured here — the integration auto-discovers
+        them from ``/api/switch/caps`` at runtime and defaults to a lock
+        entity. The user can assign relay types (door switch / gate cover)
+        and pulse durations in the options flow after setup.
+        """
         errors: dict[str, str] = {}
 
         if user_input is not None:
             self._data.update(user_input)
-            
-            # If relays are configured, move to relay configuration
-            relay_count = user_input.get(CONF_RELAY_COUNT, DEFAULT_RELAY_COUNT)
-            if relay_count > 0:
-                self._relays = []
-                return await self.async_step_relay(relay_index=0)
-            else:
-                # No relays, create entry
-                return await self._async_create_entry()
+            return await self._async_create_entry()
 
         await self._ensure_integration_info()
         default_name = self._integration_name or "2N Intercom"
@@ -341,9 +324,6 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
                 vol.Required(
                     CONF_ENABLE_DOORBELL, default=DEFAULT_ENABLE_DOORBELL
                 ): cv.boolean,
-                vol.Required(
-                    CONF_RELAY_COUNT, default=DEFAULT_RELAY_COUNT
-                ): vol.In([0, 1, 2, 3, 4]),
                 vol.Optional(
                     CONF_CALLED_ID, default=default_called
                 ): called_field,
@@ -354,92 +334,6 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
             step_id="device",
             data_schema=data_schema,
             errors=errors,
-        )
-
-    async def async_step_relay(
-        self, user_input: dict[str, Any] | None = None, relay_index: int = 0
-    ) -> ConfigFlowResult:
-        """Collect relay name/number/device-type for one relay.
-
-        The pulse-duration field is intentionally NOT in this step: its sane
-        default depends on the device type the user just picked (~2s for a
-        door strike, ~15s for a swing-gate trigger), and a single voluptuous
-        schema cannot cross-reference siblings. We collect the type here and
-        defer the duration to ``async_step_relay_pulse``.
-        """
-        errors: dict[str, str] = {}
-
-        if user_input is not None:
-            self._pending_relay = user_input
-            return await self.async_step_relay_pulse(relay_index=relay_index)
-
-        # relay_index is 0-based, but we show 1-based numbers to users
-        relay_display_number = relay_index + 1
-
-        data_schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_RELAY_NAME, default=f"Relay {relay_display_number}"
-                ): cv.string,
-                vol.Required(
-                    CONF_RELAY_NUMBER, default=relay_display_number
-                ): vol.In([1, 2, 3, 4]),
-                vol.Required(
-                    CONF_RELAY_DEVICE_TYPE, default=DEVICE_TYPE_DOOR
-                ): vol.In([DEVICE_TYPE_DOOR, DEVICE_TYPE_GATE]),
-            }
-        )
-
-        return self.async_show_form(
-            step_id="relay",
-            data_schema=data_schema,
-            errors=errors,
-            description_placeholders={"relay_number": str(relay_display_number)},
-        )
-
-    async def async_step_relay_pulse(
-        self, user_input: dict[str, Any] | None = None, relay_index: int = 0
-    ) -> ConfigFlowResult:
-        """Collect the pulse duration for the relay added in ``async_step_relay``."""
-        errors: dict[str, str] = {}
-        relay_count = self._data.get(CONF_RELAY_COUNT, DEFAULT_RELAY_COUNT)
-        pending = getattr(self, "_pending_relay", None) or {}
-        device_type = pending.get(CONF_RELAY_DEVICE_TYPE, DEVICE_TYPE_DOOR)
-
-        if user_input is not None:
-            merged = {**pending, **user_input}
-            self._relays.append(merged)
-            self._pending_relay = None
-
-            if len(self._relays) < relay_count:
-                return await self.async_step_relay(relay_index=len(self._relays))
-
-            self._data[CONF_RELAYS] = self._relays
-            return await self._async_create_entry()
-
-        relay_display_number = relay_index + 1
-        default_duration = (
-            DEFAULT_GATE_DURATION
-            if device_type == DEVICE_TYPE_GATE
-            else DEFAULT_PULSE_DURATION
-        )
-
-        data_schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_RELAY_PULSE_DURATION, default=default_duration
-                ): cv.positive_int,
-            }
-        )
-
-        return self.async_show_form(
-            step_id="relay_pulse",
-            data_schema=data_schema,
-            errors=errors,
-            description_placeholders={
-                "relay_number": str(relay_display_number),
-                "device_type": str(device_type),
-            },
         )
 
     async def async_step_reauth(

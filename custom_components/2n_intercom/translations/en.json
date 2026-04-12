@@ -2,65 +2,33 @@
   "config": {
     "step": {
       "user": {
-        "title": "2N Intercom Setup - Connection",
-        "description": "Configure connection to your 2N Intercom device",
+        "title": "2N Intercom Setup",
+        "description": "Enter the IP address and API credentials of your 2N Intercom. The connection protocol is detected automatically.",
         "data": {
           "host": "IP Address",
-          "port": "Port",
-          "protocol": "Protocol",
           "username": "Username",
-          "password": "Password",
-          "verify_ssl": "Verify SSL Certificate"
+          "password": "Password"
         },
         "data_description": {
-          "host": "IP address or hostname of the intercom (e.g., 192.168.1.100)",
-          "port": "HTTP/HTTPS port on the device (leave default unless changed)",
-          "protocol": "Use HTTP or HTTPS based on device configuration",
+          "host": "IP address or hostname of the intercom (e.g., 192.0.2.100)",
           "username": "Device login username for API access",
-          "password": "Device login password",
-          "verify_ssl": "Enable only if the HTTPS certificate is trusted by Home Assistant"
+          "password": "Device login password"
         }
       },
       "device": {
         "title": "2N Intercom Setup - Device",
-        "description": "Configure device features",
+        "description": "Configure device features. Relays can be configured later in the integration options.",
         "data": {
           "name": "Name",
           "enable_camera": "Enable Camera",
           "enable_doorbell": "Enable Doorbell",
-          "relay_count": "Number of Relays",
           "called_id": "Ringing account (peer)"
         },
         "data_description": {
           "name": "Displayed name in Home Assistant",
           "enable_camera": "Create the camera entity for snapshots and streaming",
           "enable_doorbell": "Create the doorbell entity for ring detection",
-          "relay_count": "How many relays you want to configure (0-4)",
           "called_id": "Select which account should ring. Choose All calls to ring on every button."
-        }
-      },
-      "relay": {
-        "title": "2N Intercom Setup - Relay {relay_number}",
-        "description": "Configure relay {relay_number}",
-        "data": {
-          "relay_name": "Relay Name",
-          "relay_number": "Relay Number",
-          "relay_device_type": "Device Type"
-        },
-        "data_description": {
-          "relay_name": "Displayed name for this relay",
-          "relay_number": "Physical relay number on the device (1-4)",
-          "relay_device_type": "Door creates a switch, gate creates a cover"
-        }
-      },
-      "relay_pulse": {
-        "title": "2N Intercom Setup - Relay {relay_number} pulse",
-        "description": "How long to activate relay {relay_number} ({device_type}). Door strikes typically need ~2000 ms, swing-gate triggers ~15000 ms.",
-        "data": {
-          "relay_pulse_duration": "Pulse Duration (milliseconds)"
-        },
-        "data_description": {
-          "relay_pulse_duration": "Trigger pulse length sent to the relay (ms)"
         }
       }
     },
