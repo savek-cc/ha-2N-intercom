@@ -37,7 +37,12 @@ async def async_setup_entry(
 
 
 class _TwoNIntercomDiagnosticSensor(TwoNIntercomEntity, SensorEntity):
-    """Base class for diagnostic sensors."""
+    """Base class for diagnostic sensors.
+
+    Subclasses set ``_attr_translation_key`` (matched against
+    ``entity.sensor.<key>.name`` in ``strings.json``) so the visible
+    entity name is localised by HA, per the entity-translations rule.
+    """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -45,28 +50,23 @@ class _TwoNIntercomDiagnosticSensor(TwoNIntercomEntity, SensorEntity):
         self,
         coordinator: TwoNIntercomCoordinator,
         config_entry: ConfigEntry,
-        name: str,
         unique_id_suffix: str,
     ) -> None:
         super().__init__(coordinator, config_entry)
-        self._attr_name = name
         self._attr_unique_id = f"{config_entry.entry_id}_{unique_id_suffix}"
 
 
 class TwoNIntercomSipRegistrationStatusSensor(_TwoNIntercomDiagnosticSensor):
     """Representation of the current SIP registration status."""
 
+    _attr_translation_key = "sip_registration"
+
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
         config_entry: ConfigEntry,
     ) -> None:
-        super().__init__(
-            coordinator,
-            config_entry,
-            "SIP registration",
-            "sip_registration",
-        )
+        super().__init__(coordinator, config_entry, "sip_registration")
 
     @staticmethod
     def _derive_state(phone_status: dict[str, Any]) -> str:
@@ -119,12 +119,14 @@ class TwoNIntercomSipRegistrationStatusSensor(_TwoNIntercomDiagnosticSensor):
 class TwoNIntercomCallStateSensor(_TwoNIntercomDiagnosticSensor):
     """Representation of the current call state."""
 
+    _attr_translation_key = "call_state"
+
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
         config_entry: ConfigEntry,
     ) -> None:
-        super().__init__(coordinator, config_entry, "Call state", "call_state")
+        super().__init__(coordinator, config_entry, "call_state")
 
     @property
     def state(self) -> str:

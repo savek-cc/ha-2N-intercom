@@ -97,7 +97,7 @@ class TwoNIntercomCamera(
     """
 
     _attr_has_entity_name = True
-    _attr_name = "Camera"
+    _attr_translation_key = "camera"
 
     def __init__(
         self,
@@ -132,6 +132,18 @@ class TwoNIntercomCamera(
             verify_ssl=getattr(api, "verify_ssl", True),
             unique_id=f"{config_entry.entry_id}_camera",
         )
+
+        # ``MjpegCamera.__init__`` unconditionally assigns ``self._attr_name =
+        # name`` (defaulting to ``None``). HA's ``Entity._name_internal``
+        # short-circuits on ``hasattr(self, "_attr_name")`` and never falls
+        # through to the translation_key path, which would otherwise produce
+        # the localized "Camera" suffix on top of the device name. Drop the
+        # instance attribute so the class-level ``_attr_translation_key``
+        # resolution wins.
+        try:
+            del self._attr_name
+        except AttributeError:
+            pass
 
         self._config_entry = config_entry
         self._transport_info = transport_info

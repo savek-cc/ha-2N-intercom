@@ -207,6 +207,32 @@
       }
     }
   },
+  "entity": {
+    "binary_sensor": {
+      "doorbell": {
+        "name": "Doorbell"
+      },
+      "input_1": {
+        "name": "Input 1"
+      },
+      "relay_1_active": {
+        "name": "Relay 1 active"
+      }
+    },
+    "sensor": {
+      "sip_registration": {
+        "name": "SIP registration"
+      },
+      "call_state": {
+        "name": "Call state"
+      }
+    },
+    "camera": {
+      "camera": {
+        "name": "Camera"
+      }
+    }
+  },
   "services": {
     "answer_call": {
       "name": "Answer call",

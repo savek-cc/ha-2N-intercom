@@ -89,7 +89,7 @@ class TwoNIntercomDoorbell(TwoNIntercomEntity, BinarySensorEntity):
     the button" without overloading device-class meaning.
     """
 
-    _attr_name = "Doorbell"
+    _attr_translation_key = "doorbell"
     _attr_device_class = BinarySensorDeviceClass.OCCUPANCY
 
     def __init__(
@@ -141,7 +141,7 @@ class TwoNIntercomDoorbell(TwoNIntercomEntity, BinarySensorEntity):
 class TwoNIntercomInput1Sensor(TwoNIntercomEntity, BinarySensorEntity):
     """Representation of the real IO input 1 state."""
 
-    _attr_name = "Input 1"
+    _attr_translation_key = "input_1"
 
     def __init__(
         self,
@@ -172,7 +172,7 @@ class TwoNIntercomRelay1ActiveSensor(TwoNIntercomEntity, BinarySensorEntity):
     """Representation of the relay 1 active state."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_name = "Relay 1 active"
+    _attr_translation_key = "relay_1_active"
 
     def __init__(
         self,
