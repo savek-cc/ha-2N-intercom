@@ -21,6 +21,7 @@ def _install_homeassistant_stubs() -> None:
     binary_sensor_module = types.ModuleType("homeassistant.components.binary_sensor")
 
     class BinarySensorDeviceClass:
+        MOTION = "motion"
         OCCUPANCY = "occupancy"
 
     class BinarySensorEntity:
@@ -101,6 +102,9 @@ class FakeCoordinator:
         self.switch_caps = switch_caps or {}
         self.switch_status = switch_status or {}
         self.last_update_success = True
+        self.motion_detection_available = False
+        self.motion_detected = False
+        self.last_motion_time = None
 
     def get_device_info(self, entry_id, name):
         return {"entry_id": entry_id, "name": name}
@@ -280,6 +284,292 @@ class BinarySensorPlatformTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(entity.is_on)
         self.assertEqual(entity._attr_unique_id, "entry-1_relay1_active")
         self.assertEqual(entity._attr_entity_category, "diagnostic")
+
+
+    def test_doorbell_is_on_when_ring_active(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        coordinator.ring_active = True
+        entity = binary_sensor_module.TwoNIntercomDoorbell(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        self.assertTrue(entity.is_on)
+
+    def test_doorbell_is_off_when_not_ringing(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        coordinator.ring_active = False
+        entity = binary_sensor_module.TwoNIntercomDoorbell(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        self.assertFalse(entity.is_on)
+
+    def test_doorbell_extra_state_attributes(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        from datetime import datetime
+
+        coordinator = FakeCoordinator()
+        coordinator.ring_active = True
+        coordinator.last_ring_time = datetime(2026, 4, 12, 10, 0)
+        coordinator.called_peer = "sip:100@intercom"
+        coordinator.caller_info = {
+            "name": "John",
+            "number": "100",
+            "button": "1",
+        }
+        coordinator.data = types.SimpleNamespace(
+            call_status={"direction": "incoming"},
+        )
+        coordinator.call_state = "ringing"
+
+        entity = binary_sensor_module.TwoNIntercomDoorbell(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        attrs = entity.extra_state_attributes
+        self.assertEqual(attrs["caller_name"], "John")
+        self.assertEqual(attrs["caller_number"], "100")
+        self.assertEqual(attrs["button"], "1")
+        self.assertEqual(attrs["called_peer"], "sip:100@intercom")
+        self.assertIn("last_ring", attrs)
+        self.assertEqual(attrs["call_state"], "ringing")
+        self.assertEqual(attrs["call_direction"], "incoming")
+
+    def test_doorbell_extra_state_attributes_empty(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        coordinator.ring_active = False
+        coordinator.last_ring_time = None
+        coordinator.called_peer = None
+        coordinator.caller_info = {}
+        coordinator.data = None
+
+        entity = binary_sensor_module.TwoNIntercomDoorbell(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        attrs = entity.extra_state_attributes
+        self.assertEqual(attrs, {})
+
+    def test_input1_off_when_state_zero(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator(
+            io_status={"ports": [{"port": "input1", "state": 0}]},
+        )
+        entity = binary_sensor_module.TwoNIntercomInput1Sensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        self.assertFalse(entity.is_on)
+
+    def test_input1_on_with_string_state(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator(
+            io_status={"ports": [{"port": "input1", "state": "on"}]},
+        )
+        entity = binary_sensor_module.TwoNIntercomInput1Sensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        self.assertTrue(entity.is_on)
+
+    def test_relay1_active_off(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator(
+            switch_status={"switches": [{"switch": 1, "active": False}]},
+        )
+        entity = binary_sensor_module.TwoNIntercomRelay1ActiveSensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        self.assertFalse(entity.is_on)
+
+    def test_relay1_active_disabled_by_default(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator(
+            switch_status={"switches": [{"switch": 1, "active": False}]},
+        )
+        entity = binary_sensor_module.TwoNIntercomRelay1ActiveSensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        self.assertFalse(entity._attr_entity_registry_enabled_default)
+
+    def test_port_exists_with_type_filter(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        payload = {"ports": [{"port": "input1", "type": "output"}]}
+        # Should not find it because type doesn't match
+        self.assertFalse(
+            binary_sensor_module._port_exists(payload, "input1", port_type="input")
+        )
+        # Without type filter, should find it
+        self.assertTrue(
+            binary_sensor_module._port_exists(payload, "input1")
+        )
+
+    def test_switch_exists_true(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        self.assertTrue(
+            binary_sensor_module._switch_exists({"switches": [{"switch": 1}]}, 1)
+        )
+
+    def test_switch_exists_false(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        self.assertFalse(
+            binary_sensor_module._switch_exists({"switches": [{"switch": 2}]}, 1)
+        )
+
+    def test_switch_exists_empty(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        self.assertFalse(
+            binary_sensor_module._switch_exists({}, 1)
+        )
+
+
+    def test_entity_base_properties(self) -> None:
+        """Test that entity base class provides device_info, available, name."""
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        coordinator.last_update_success = True
+        entry = FakeConfigEntry("entry-1", {"name": "Front Door"})
+        entry.options = {}
+
+        entity = binary_sensor_module.TwoNIntercomDoorbell(coordinator, entry)
+
+        # device_info from base entity
+        info = entity.device_info
+        self.assertEqual(info["entry_id"], "entry-1")
+        self.assertEqual(info["name"], "Front Door")
+
+        # available from base entity
+        self.assertTrue(entity.available)
+        coordinator.last_update_success = False
+        self.assertFalse(entity.available)
+
+    def test_entity_display_name_from_options(self) -> None:
+        """_entry_display_name prefers options over data."""
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        entry = FakeConfigEntry("entry-1", {"name": "Data Name"})
+        entry.options = {"name": "Options Name"}
+
+        entity = binary_sensor_module.TwoNIntercomDoorbell(coordinator, entry)
+        info = entity.device_info
+        self.assertEqual(info["name"], "Options Name")
+
+    # --- Motion sensor tests ---
+
+    async def test_setup_entry_adds_motion_sensor_when_available(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        coordinator.motion_detection_available = True
+        entry = FakeConfigEntry("entry-1", {"name": "Front Door"})
+        entry.runtime_data = types.SimpleNamespace(coordinator=coordinator)
+
+        hass = types.SimpleNamespace(data={})
+        added: list[object] = []
+
+        await binary_sensor_module.async_setup_entry(
+            hass,
+            entry,
+            lambda entities, update_before_add=False: added.extend(entities),
+        )
+
+        unique_ids = [e._attr_unique_id for e in added]
+        self.assertIn("entry-1_motion", unique_ids)
+
+    async def test_setup_entry_skips_motion_sensor_when_not_available(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        coordinator.motion_detection_available = False
+        entry = FakeConfigEntry("entry-1", {"name": "Front Door"})
+        entry.runtime_data = types.SimpleNamespace(coordinator=coordinator)
+
+        hass = types.SimpleNamespace(data={})
+        added: list[object] = []
+
+        await binary_sensor_module.async_setup_entry(
+            hass,
+            entry,
+            lambda entities, update_before_add=False: added.extend(entities),
+        )
+
+        unique_ids = [e._attr_unique_id for e in added]
+        self.assertNotIn("entry-1_motion", unique_ids)
+
+    def test_motion_sensor_is_on_when_detected(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        coordinator.motion_detected = True
+        entity = binary_sensor_module.TwoNIntercomMotionSensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        self.assertTrue(entity.is_on)
+
+    def test_motion_sensor_is_off_when_not_detected(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        coordinator.motion_detected = False
+        entity = binary_sensor_module.TwoNIntercomMotionSensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        self.assertFalse(entity.is_on)
+
+    def test_motion_sensor_device_class(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        entity = binary_sensor_module.TwoNIntercomMotionSensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        self.assertEqual(entity._attr_device_class, "motion")
+
+    def test_motion_sensor_translation_key(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        entity = binary_sensor_module.TwoNIntercomMotionSensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        self.assertEqual(entity._attr_translation_key, "motion")
+        self.assertTrue(entity._attr_has_entity_name)
+
+    def test_motion_sensor_unique_id(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        entity = binary_sensor_module.TwoNIntercomMotionSensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        self.assertEqual(entity._attr_unique_id, "entry-1_motion")
+
+    def test_motion_sensor_extra_state_attributes_with_time(self) -> None:
+        from datetime import datetime
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        coordinator.last_motion_time = datetime(2026, 4, 12, 14, 30, 0)
+        entity = binary_sensor_module.TwoNIntercomMotionSensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        attrs = entity.extra_state_attributes
+        self.assertIn("last_motion", attrs)
+        self.assertEqual(attrs["last_motion"], "2026-04-12T14:30:00")
+
+    def test_motion_sensor_extra_state_attributes_empty(self) -> None:
+        binary_sensor_module = self.binary_sensor_module
+        coordinator = FakeCoordinator()
+        coordinator.last_motion_time = None
+        entity = binary_sensor_module.TwoNIntercomMotionSensor(
+            coordinator,
+            FakeConfigEntry("entry-1", {"name": "Door"}),
+        )
+        attrs = entity.extra_state_attributes
+        self.assertEqual(attrs, {})
 
 
 if __name__ == "__main__":

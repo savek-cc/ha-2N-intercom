@@ -83,18 +83,6 @@
           "enable_doorbell": "Povolit zvonek"
         }
       },
-      "user": {
-        "title": "Možnosti 2N Intercom - Připojení",
-        "description": "Upravte nastavení připojení",
-        "data_description": {
-          "host": "IP adresa nebo hostname zařízení",
-          "port": "HTTP/HTTPS port zařízení",
-          "protocol": "Použijte HTTP nebo HTTPS podle nastavení zařízení",
-          "username": "Přihlašovací jméno zařízení pro API",
-          "password": "Přihlašovací heslo zařízení",
-          "verify_ssl": "Zapněte jen pokud Home Assistant důvěřuje HTTPS certifikátu"
-        }
-      },
       "device": {
         "title": "Možnosti 2N Intercom - Zařízení",
         "description": "Upravte funkce zařízení",
@@ -125,14 +113,18 @@
           "camera_source": "Zdroj kamery",
           "mjpeg_width": "Šířka MJPEG (pixely)",
           "mjpeg_height": "Výška MJPEG (pixely)",
-          "mjpeg_fps": "Snímky za sekundu (MJPEG)"
+          "mjpeg_fps": "Snímky za sekundu (MJPEG)",
+          "rtsp_username": "RTSP uživatelské jméno",
+          "rtsp_password": "RTSP heslo"
         },
         "data_description": {
           "live_view_mode": "auto upřednostní RTSP, pak MJPEG, případně jen JPEG snímky",
           "camera_source": "Který senzor zařízení použít — internal je vestavěná kamera, external je sekundární modul (pokud je osazen)",
           "mjpeg_width": "Šířka MJPEG streamu vyžádaného od zařízení (např. 640)",
           "mjpeg_height": "Výška MJPEG streamu vyžádaného od zařízení (např. 480)",
-          "mjpeg_fps": "Snímky za sekundu pro MJPEG stream (1-15)"
+          "mjpeg_fps": "Snímky za sekundu pro MJPEG stream (1-15)",
+          "rtsp_username": "Uživatelské jméno pro RTSP streamovací službu 2N (konfiguruje se samostatně v rozhraní zařízení pod Služby > Streaming)",
+          "rtsp_password": "Heslo k účtu RTSP streamovací služby"
         }
       },
       "relay": {
@@ -205,6 +197,9 @@
       },
       "relay_1_active": {
         "name": "Relé 1 aktivní"
+      },
+      "motion": {
+        "name": "Pohyb"
       }
     },
     "sensor": {

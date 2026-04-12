@@ -10,7 +10,10 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import EntityCategory
+try:
+    from homeassistant.const import EntityCategory
+except ImportError:  # pragma: no cover — test stub compat
+    from homeassistant.helpers.entity import EntityCategory  # type: ignore[no-redef,assignment,attr-defined]
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import TwoNIntercomCoordinator, TwoNIntercomRuntimeData
@@ -73,13 +76,16 @@ async def async_setup_entry(
     if _switch_exists(coordinator.switch_caps, 1):
         entities.append(TwoNIntercomRelay1ActiveSensor(coordinator, config_entry))
 
+    if coordinator.motion_detection_available:
+        entities.append(TwoNIntercomMotionSensor(coordinator, config_entry))
+
     async_add_entities(
         entities,
         True,
     )
 
 
-class TwoNIntercomDoorbell(TwoNIntercomEntity, BinarySensorEntity):
+class TwoNIntercomDoorbell(TwoNIntercomEntity, BinarySensorEntity):  # type: ignore[misc]
     """Representation of a 2N Intercom doorbell.
 
     Uses ``OCCUPANCY`` rather than ``DOORBELL`` because HomeKit's
@@ -104,7 +110,8 @@ class TwoNIntercomDoorbell(TwoNIntercomEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         """Return true if doorbell is ringing."""
-        return self.coordinator.ring_active
+        active: bool = self.coordinator.ring_active
+        return active
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -138,7 +145,7 @@ class TwoNIntercomDoorbell(TwoNIntercomEntity, BinarySensorEntity):
         return attributes
 
 
-class TwoNIntercomInput1Sensor(TwoNIntercomEntity, BinarySensorEntity):
+class TwoNIntercomInput1Sensor(TwoNIntercomEntity, BinarySensorEntity):  # type: ignore[misc]
     """Representation of the real IO input 1 state."""
 
     _attr_translation_key = "input_1"
@@ -168,10 +175,11 @@ class TwoNIntercomInput1Sensor(TwoNIntercomEntity, BinarySensorEntity):
         return self._is_port_on(self.coordinator.io_status)
 
 
-class TwoNIntercomRelay1ActiveSensor(TwoNIntercomEntity, BinarySensorEntity):
+class TwoNIntercomRelay1ActiveSensor(TwoNIntercomEntity, BinarySensorEntity):  # type: ignore[misc]
     """Representation of the relay 1 active state."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
     _attr_translation_key = "relay_1_active"
 
     def __init__(
@@ -197,3 +205,37 @@ class TwoNIntercomRelay1ActiveSensor(TwoNIntercomEntity, BinarySensorEntity):
     def is_on(self) -> bool:
         """Return true if relay 1 is active."""
         return self._is_switch_active(self.coordinator.switch_status)
+
+
+class TwoNIntercomMotionSensor(TwoNIntercomEntity, BinarySensorEntity):  # type: ignore[misc]
+    """Motion detection from the 2N camera.
+
+    Driven by ``MotionDetected`` log events pushed from the device.
+    Only created when ``/api/system/caps`` reports ``motionDetection``
+    as ``"active,licensed"``.
+    """
+
+    _attr_translation_key = "motion"
+    _attr_device_class = BinarySensorDeviceClass.MOTION
+
+    def __init__(
+        self,
+        coordinator: TwoNIntercomCoordinator,
+        config_entry: ConfigEntry,
+    ) -> None:
+        """Initialize the motion sensor."""
+        super().__init__(coordinator, config_entry)
+        self._attr_unique_id = f"{config_entry.entry_id}_motion"
+
+    @property
+    def is_on(self) -> bool:
+        """Return true if motion is detected."""
+        return self.coordinator.motion_detected
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the state attributes."""
+        attrs: dict[str, Any] = {}
+        if self.coordinator.last_motion_time:
+            attrs["last_motion"] = self.coordinator.last_motion_time.isoformat()
+        return attrs

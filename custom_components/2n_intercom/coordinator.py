@@ -40,11 +40,11 @@ if TYPE_CHECKING:
 # don't ship it. Import lazily so module load works in any HA shape; raising
 # it in real HA still triggers the reauth flow.
 try:
-    from homeassistant.exceptions import (  # type: ignore[attr-defined]
+    from homeassistant.exceptions import (
         ConfigEntryAuthFailed,
     )
 except ImportError:  # pragma: no cover - test stub fallback
-    class ConfigEntryAuthFailed(ConfigEntryNotReady):
+    class ConfigEntryAuthFailed(ConfigEntryNotReady):  # type: ignore[no-redef,misc]
         """Fallback for HA stubs that lack ConfigEntryAuthFailed."""
 
 _LOGGER = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ class TwoNIntercomData:
     io_status: dict[str, Any]
 
 
-class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
+class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type: ignore[misc]
     """Coordinator to manage data updates from 2N Intercom."""
 
     _RING_STATES = {"ringing", "alerting", "incoming", "ring"}
@@ -150,9 +150,12 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
         self._last_call_state_value: str = "idle"
         self._ring_pulse_until: datetime | None = None
         self._log_subscription_id: int | None = None
-        self._log_listener_task: asyncio.Task | None = None
+        self._log_listener_task: asyncio.Task[None] | None = None
         self._log_listener_stopped = False
         self._camera_transport_info: CameraTransportInfo | None = None
+        self._system_caps: dict[str, str] = {}
+        self._motion_detected = False
+        self._last_motion_time: datetime | None = None
 
     @staticmethod
     def _normalize_peer(peer: str | None) -> str | None:
@@ -171,23 +174,24 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
         calls = sessions[0].get("calls") or []
         if not calls:
             return None
-        return calls[0].get("peer")
+        peer: str | None = calls[0].get("peer")
+        return peer
 
     @staticmethod
     def _extract_call_state(call_status: dict[str, Any]) -> str | None:
-        state = call_status.get("state")
+        state: str | None = call_status.get("state")
         if state:
             return state
 
         sessions = call_status.get("sessions") or []
         for session in sessions:
-            session_state = session.get("state")
+            session_state: str | None = session.get("state")
             if session_state:
                 return session_state
 
             calls = session.get("calls") or []
             for call in calls:
-                call_state = call.get("state") or call.get("status") or call.get("callState")
+                call_state: str | None = call.get("state") or call.get("status") or call.get("callState")
                 if call_state:
                     return call_state
 
@@ -242,12 +246,31 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
 
         return None
 
+    def _process_motion_event(self, event: dict[str, Any]) -> bool:
+        """Handle a MotionDetected log event."""
+        params = event.get("params") or {}
+        if not isinstance(params, dict):
+            return False
+        state = str(params.get("state") or "").strip().lower()
+        if state == "in":
+            self._motion_detected = True
+            self._last_motion_time = datetime.now()
+            return True
+        if state == "out":
+            self._motion_detected = False
+            return True
+        return False
+
     def _process_log_event(self, event: dict[str, Any]) -> bool:
         """Apply a supported log event to coordinator state."""
         if not isinstance(event, dict):
             return False
 
         event_name = str(event.get("event") or "").strip()
+
+        if event_name == "MotionDetected":
+            return self._process_motion_event(event)
+
         if event_name not in {"CallStateChanged", "CallSessionStateChanged"}:
             return False
 
@@ -319,18 +342,19 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
 
         self._last_call_state_value = state
 
-        if self.data is not None:
+        current: TwoNIntercomData | None = self.data  # type: ignore[has-type]
+        if current is not None:
             self.data = TwoNIntercomData(
-                call_status=self.data.call_status,
+                call_status=current.call_status,
                 last_ring_time=self._last_ring_time,
-                caller_info=self.data.caller_info,
+                caller_info=current.caller_info,
                 active_session_id=self._active_session_id,
-                available=self.data.available,
-                phone_status=self.data.phone_status,
-                switch_caps=self.data.switch_caps,
-                switch_status=self.data.switch_status,
-                io_caps=self.data.io_caps,
-                io_status=self.data.io_status,
+                available=current.available,
+                phone_status=current.phone_status,
+                switch_caps=current.switch_caps,
+                switch_status=current.switch_status,
+                io_caps=current.io_caps,
+                io_status=current.io_status,
             )
 
         return True
@@ -364,9 +388,10 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
         while not self._log_listener_stopped:
             subscription_id: int | None = None
             try:
-                subscription_id = await self.api.async_subscribe_log(
-                    ["CallStateChanged", "CallSessionStateChanged"]
-                )
+                log_events = ["CallStateChanged", "CallSessionStateChanged"]
+                if self.motion_detection_available:
+                    log_events.append("MotionDetected")
+                subscription_id = await self.api.async_subscribe_log(log_events)
             except Exception as err:  # pylint: disable=broad-except
                 _LOGGER.debug("Log subscription failed: %s", err)
 
@@ -492,7 +517,8 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
             return cached_value or {}
 
         setattr(self, cache_attr, value)
-        return value
+        result: dict[str, Any] = value
+        return result
 
     async def async_initialize_static_caches(self) -> None:
         """Fetch device metadata that does not change at runtime.
@@ -508,6 +534,13 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
             except Exception as err:  # pylint: disable=broad-except
                 _LOGGER.debug("Failed to fetch system info: %s", err)
                 self._system_info = {}
+
+        if not self._system_caps:
+            try:
+                self._system_caps = await self.api.async_get_system_caps()
+            except Exception as err:  # pylint: disable=broad-except
+                _LOGGER.debug("Failed to fetch system caps: %s", err)
+                self._system_caps = {}
 
         if self._switch_caps is None:
             await self._refresh_secondary_cache(
@@ -554,6 +587,13 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
         overrides: dict[str, Any] = {
             "requested_mode": DEFAULT_LIVE_VIEW_MODE,
         }
+
+        # Skip the RTSP probe when system/caps says rtspServer is not active.
+        # Only pass the flag when we have caps data; None lets the API probe
+        # normally (backwards-compatible with devices where caps fetch failed).
+        if self._system_caps:
+            overrides["rtsp_capable"] = self.rtsp_server_available
+
         entry = self.config_entry
         if entry is None:
             return overrides
@@ -794,6 +834,35 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
         return self._io_status or {}
 
     @property
+    def system_caps(self) -> dict[str, str]:
+        """Return cached system capabilities."""
+        return self._system_caps or {}
+
+    @property
+    def rtsp_server_available(self) -> bool:
+        """Return True when the device has RTSP server active."""
+        cap = self._system_caps.get("rtspServer", "")
+        parts = [p.strip() for p in cap.split(",")]
+        return "active" in parts
+
+    @property
+    def motion_detection_available(self) -> bool:
+        """Return True when the device has motion detection active."""
+        cap = self._system_caps.get("motionDetection", "")
+        parts = [p.strip() for p in cap.split(",")]
+        return "active" in parts
+
+    @property
+    def motion_detected(self) -> bool:
+        """Return True when motion is currently detected."""
+        return self._motion_detected
+
+    @property
+    def last_motion_time(self) -> datetime | None:
+        """Return the timestamp of the last motion detection start."""
+        return self._last_motion_time
+
+    @property
     def camera_transport_info(self) -> CameraTransportInfo:
         """Return the camera transport info resolved during setup."""
         if self._camera_transport_info is not None:
@@ -805,13 +874,23 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):
         system_info = self.system_info
         model = system_info.get("variant") or system_info.get("deviceName") or "IP Intercom"
         sw_version = system_info.get("swVersion") or "1.0.0"
-        return {
+        info: dict[str, Any] = {
             "identifiers": {(DOMAIN, entry_id)},
             "name": name,
             "manufacturer": "2N",
             "model": model,
             "sw_version": sw_version,
         }
+        serial = system_info.get("serialNumber")
+        if serial:
+            info["serial_number"] = str(serial)
+        hw_version = system_info.get("hwVersion")
+        if hw_version:
+            info["hw_version"] = str(hw_version)
+        mac = system_info.get("macAddr")
+        if mac:
+            info["connections"] = {("mac", str(mac))}
+        return info
 
     async def async_trigger_relay(
         self, relay: int, duration: int = 2000

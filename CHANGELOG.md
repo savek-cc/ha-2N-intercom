@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.3.0 - 2026-04-12
+
+### Motion detection binary sensor
+- New `binary_sensor.<intercom>_motion` entity with `device_class=motion`, driven by the device's `MotionDetected` log events (`state: "in"` = motion started, `"out"` = motion ended)
+- Motion detection capability is auto-detected via `/api/system/caps` — the sensor is only created when `motionDetection` is `"active,licensed"` on the device
+- The log subscription (`/api/log/subscribe`) now includes `MotionDetected` events alongside `CallStateChanged` / `CallSessionStateChanged` when motion detection is available
+- `last_motion` timestamp exposed as extra state attribute
+- System capabilities (`/api/system/caps`) fetched once during coordinator static cache initialisation
+- Diagnostics output includes `system_caps` and `motion_detection` sections
+- RTSP probe skipped entirely when `/api/system/caps` reports `rtspServer` as not `"active"` — avoids a TCP+Digest handshake timeout on devices without the RTSP license
+- Translations updated (EN, CS) for the new entity
+
+## 1.2.0 - 2026-04-12
+
+### RTSP credentials as separate configuration
+- The 2N RTSP server has its own user database, independent of the HTTP API accounts. RTSP credentials are now configured separately in the camera options step (`rtsp_username`, `rtsp_password`) with no fallback to HTTP API credentials
+- RTSP probe upgraded from port-reachability check to full Digest authentication handshake (unauthenticated OPTIONS → 401 challenge → authenticated OPTIONS) — the integration no longer marks RTSP as "available" when credentials are wrong
+- Special characters in RTSP credentials are URL-encoded in the stream URL
+- Without RTSP credentials configured, the integration skips RTSP entirely and falls back to MJPEG
+- RTSP credentials are redacted in diagnostics output
+- Translations updated (EN, CS) with labels and descriptions for the new fields
+
 ## 1.1.0 - 2026-04-11
 
 ### HA 2026.4+ compliance

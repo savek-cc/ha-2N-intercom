@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 import logging
 import re
+from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -294,10 +295,10 @@ def parse_camera_caps(payload: dict[str, Any] | None) -> CameraCapabilities:
                     sources.extend(_collect_camera_sources(child))
 
                 if isinstance(child, str):
-                    resolution = _parse_resolution_string(child)
-                    if resolution is not None and resolution.as_tuple() not in resolution_keys_seen:
-                        resolution_keys_seen.add(resolution.as_tuple())
-                        resolutions.append(resolution)
+                    child_res = _parse_resolution_string(child)
+                    if child_res is not None and child_res.as_tuple() not in resolution_keys_seen:
+                        resolution_keys_seen.add(child_res.as_tuple())
+                        resolutions.append(child_res)
 
                 if normalized_key in _CAMERA_CAPS_KEYS or isinstance(child, (dict, list, tuple, set)):
                     visit(child, normalized_key)
@@ -309,10 +310,10 @@ def parse_camera_caps(payload: dict[str, Any] | None) -> CameraCapabilities:
             return
 
         if isinstance(value, str):
-            resolution = _parse_resolution_string(value)
-            if resolution is not None and resolution.as_tuple() not in resolution_keys_seen:
-                resolution_keys_seen.add(resolution.as_tuple())
-                resolutions.append(resolution)
+            resolution_val: CameraResolution | None = _parse_resolution_string(value)
+            if resolution_val is not None and resolution_val.as_tuple() not in resolution_keys_seen:
+                resolution_keys_seen.add(resolution_val.as_tuple())
+                resolutions.append(resolution_val)
             elif parent_key in _CAMERA_SOURCE_KEYS:
                 sources.extend(_collect_camera_sources(value))
 
@@ -376,6 +377,8 @@ class TwoNIntercomAPI:
         protocol: str = "https",
         verify_ssl: bool = False,
         session: aiohttp.ClientSession | None = None,
+        rtsp_username: str | None = None,
+        rtsp_password: str | None = None,
     ) -> None:
         """Initialize the API client."""
         self.host = host
@@ -384,6 +387,8 @@ class TwoNIntercomAPI:
         self.password = password
         self.protocol = protocol
         self.verify_ssl = verify_ssl
+        self.rtsp_username = rtsp_username
+        self.rtsp_password = rtsp_password
         self._session: aiohttp.ClientSession | None = session
         self._owns_session: bool = session is None
         self._base_url = f"{protocol}://{host}:{port}"
@@ -537,7 +542,7 @@ class TwoNIntercomAPI:
         params: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-    ):
+    ) -> AsyncIterator[aiohttp.ClientResponse]:
         """Send a request using Digest auth middleware with Basic fallback."""
         session = await self.async_get_session()
         url = f"{self._base_url}{path}"
@@ -571,7 +576,7 @@ class TwoNIntercomAPI:
         params: dict[str, Any] | None = None,
         json_data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
-    ):
+    ) -> AsyncIterator[aiohttp.ClientResponse]:
         """Send a request without Digest/Basic auth handling."""
         url = f"{self._base_url}{path}"
         request_kwargs: dict[str, Any] = {
@@ -693,7 +698,8 @@ class TwoNIntercomAPI:
                     return result or []
 
                 if "users" in data:
-                    return data
+                    users: list[dict[str, Any]] = data.get("users", [])
+                    return users
 
             return []
 
@@ -730,7 +736,8 @@ class TwoNIntercomAPI:
             # Expected format: {"success": true, "result": {...}}
             if isinstance(data, dict):
                 if data.get("success", False):
-                    return data.get("result", {})
+                    result: dict[str, Any] = data.get("result", {})
+                    return result
                 error = parse_device_error(data)
                 if error is not None:
                     log_device_error(
@@ -1145,7 +1152,8 @@ class TwoNIntercomAPI:
 
             if isinstance(data, dict):
                 if data.get("success", False):
-                    return data.get("result", {})
+                    sys_result: dict[str, Any] = data.get("result", {})
+                    return sys_result
                 error = parse_device_error(data)
                 if error is not None:
                     log_device_error(
@@ -1168,6 +1176,55 @@ class TwoNIntercomAPI:
         except Exception as err:
             _LOGGER.error("Unexpected error getting system info: %s", err)
             raise TwoNAPIError(f"API error: {err}") from err
+
+    async def async_get_system_caps(self) -> dict[str, str]:
+        """Get system capabilities from /api/system/caps.
+
+        Returns a dict mapping capability names to their status strings,
+        e.g. ``{"motionDetection": "active,licensed", "rtspServer": "inactive,licensed"}``.
+        """
+        try:
+            async with async_timeout.timeout(API_TIMEOUT):
+                async with self._async_request(
+                    "GET",
+                    "/api/system/caps",
+                ) as response:
+                    if response.status == 401:
+                        raise TwoNAuthenticationError(
+                            "Authentication failed - invalid credentials"
+                        )
+
+                    response.raise_for_status()
+                    data = await response.json()
+
+            if isinstance(data, dict):
+                if data.get("success", False):
+                    result = data.get("result", {})
+                    options = result.get("options", {})
+                    if isinstance(options, dict):
+                        return {str(k): str(v) for k, v in options.items()}
+                error = parse_device_error(data)
+                if error is not None:
+                    log_device_error(
+                        logging.WARNING,
+                        "system caps",
+                        "/api/system/caps",
+                        None,
+                        error,
+                    )
+            return {}
+
+        except TwoNAuthenticationError:
+            raise
+        except asyncio.TimeoutError as err:
+            _LOGGER.debug("Timeout getting system caps: %s", err)
+            return {}
+        except aiohttp.ClientError as err:
+            _LOGGER.debug("Error getting system caps: %s", err)
+            return {}
+        except Exception as err:
+            _LOGGER.debug("Unexpected error getting system caps: %s", err)
+            return {}
 
     async def async_get_camera_caps(
         self,
@@ -1300,7 +1357,20 @@ class TwoNIntercomAPI:
             return False
 
     async def async_probe_rtsp(self) -> bool:
-        """Check whether RTSP appears available without crashing the integration."""
+        """Check whether RTSP is available and the configured credentials work.
+
+        The 2N RTSP server has its own user database, independent of the
+        HTTP API accounts.  If no RTSP credentials are configured the
+        probe returns ``False`` so the transport resolver never picks RTSP
+        (the user must explicitly set them in the options flow).
+
+        When credentials *are* configured the probe performs a full Digest
+        authentication handshake to confirm the RTSP server accepts them.
+        """
+        if not self.rtsp_username or not self.rtsp_password:
+            _LOGGER.debug("RTSP probe skipped: no RTSP credentials configured")
+            return False
+
         reader = None
         writer = None
         try:
@@ -1309,18 +1379,58 @@ class TwoNIntercomAPI:
                 asyncio.open_connection(self.host, rtsp_port),
                 timeout=RTSP_PROBE_TIMEOUT,
             )
+            uri = f"rtsp://{self.host}:{rtsp_port}/{RTSP_PATH}"
+
+            # Step 1 — unauthenticated OPTIONS to get the Digest challenge.
             request = (
-                f"OPTIONS rtsp://{self.host}:{rtsp_port}/{RTSP_PATH} RTSP/1.0\r\n"
+                f"OPTIONS {uri} RTSP/1.0\r\n"
                 "CSeq: 1\r\n"
                 "User-Agent: HomeAssistant-2NIntercom\r\n\r\n"
             )
             writer.write(request.encode("ascii"))
             await writer.drain()
-            response = await asyncio.wait_for(reader.read(256), timeout=RTSP_PROBE_TIMEOUT)
+            response = await asyncio.wait_for(
+                reader.read(1024), timeout=RTSP_PROBE_TIMEOUT
+            )
             response_text = response.decode("utf-8", errors="ignore")
+
             if not response_text.startswith("RTSP/1.0"):
                 return False
-            return not any(code in response_text for code in (" 403 ", " 404 ", " 454 "))
+            if any(code in response_text for code in (" 403 ", " 404 ", " 454 ")):
+                return False
+
+            # If the server didn't challenge us (200 OK), RTSP is open.
+            if " 200 " in response_text:
+                return True
+
+            # Expect a 401 with a Digest challenge.
+            if " 401 " not in response_text:
+                return False
+
+            auth_header = self._build_rtsp_digest_auth(
+                response_text, "OPTIONS", uri
+            )
+            if auth_header is None:
+                _LOGGER.debug("RTSP probe: could not parse Digest challenge")
+                return False
+
+            # Step 2 — authenticated OPTIONS.
+            auth_request = (
+                f"OPTIONS {uri} RTSP/1.0\r\n"
+                "CSeq: 2\r\n"
+                "User-Agent: HomeAssistant-2NIntercom\r\n"
+                f"Authorization: {auth_header}\r\n\r\n"
+            )
+            writer.write(auth_request.encode("ascii"))
+            await writer.drain()
+            auth_response = await asyncio.wait_for(
+                reader.read(1024), timeout=RTSP_PROBE_TIMEOUT
+            )
+            auth_text = auth_response.decode("utf-8", errors="ignore")
+            if " 200 " in auth_text:
+                return True
+            _LOGGER.debug("RTSP probe: auth failed — %s", auth_text.split("\r\n")[0])
+            return False
         except Exception as err:  # pylint: disable=broad-except
             _LOGGER.debug("RTSP probe failed: %s", err)
             return False
@@ -1332,6 +1442,48 @@ class TwoNIntercomAPI:
                 except Exception:  # pylint: disable=broad-except
                     pass
 
+    def _build_rtsp_digest_auth(
+        self, challenge_response: str, method: str, uri: str
+    ) -> str | None:
+        """Build a Digest Authorization header value from a 401 challenge."""
+        import hashlib  # noqa: PLC0415
+
+        nonce_match = re.search(r'nonce="([^"]+)"', challenge_response)
+        realm_match = re.search(r'realm="([^"]+)"', challenge_response)
+        if not nonce_match or not realm_match:
+            return None
+
+        nonce = nonce_match.group(1)
+        realm = realm_match.group(1)
+        qop_match = re.search(r'qop="([^"]+)"', challenge_response)
+        qop = qop_match.group(1) if qop_match else None
+
+        username = self.rtsp_username or ""
+        password = self.rtsp_password or ""
+
+        ha1 = hashlib.md5(
+            f"{username}:{realm}:{password}".encode()
+        ).hexdigest()
+        ha2 = hashlib.md5(f"{method}:{uri}".encode()).hexdigest()
+
+        if qop:
+            nc = "00000001"
+            cnonce = hashlib.md5(nonce.encode()).hexdigest()[:8]
+            digest = hashlib.md5(
+                f"{ha1}:{nonce}:{nc}:{cnonce}:{qop}:{ha2}".encode()
+            ).hexdigest()
+            return (
+                f'Digest username="{username}", realm="{realm}", '
+                f'nonce="{nonce}", uri="{uri}", response="{digest}", '
+                f'qop={qop}, nc={nc}, cnonce="{cnonce}"'
+            )
+
+        digest = hashlib.md5(f"{ha1}:{nonce}:{ha2}".encode()).hexdigest()
+        return (
+            f'Digest username="{username}", realm="{realm}", '
+            f'nonce="{nonce}", uri="{uri}", response="{digest}"'
+        )
+
     async def async_get_camera_transport_info(
         self,
         *,
@@ -1341,6 +1493,7 @@ class TwoNIntercomAPI:
         mjpeg_height: int | None = None,
         mjpeg_fps: int | None = None,
         camera_source: str | None = None,
+        rtsp_capable: bool | None = None,
     ) -> CameraTransportInfo:
         """Return a normalized transport-info object for the camera entity.
 
@@ -1397,7 +1550,13 @@ class TwoNIntercomAPI:
             height=requested_height,
         )
 
-        rtsp_available = await self.async_probe_rtsp()
+        if rtsp_capable is False:
+            _LOGGER.debug(
+                "RTSP probe skipped: rtspServer capability not active on device"
+            )
+            rtsp_available = False
+        else:
+            rtsp_available = await self.async_probe_rtsp()
         mjpeg_authenticated_available = await self.async_probe_mjpeg(
             capabilities=capabilities,
             width=resolved_width,
@@ -1586,7 +1745,8 @@ class TwoNIntercomAPI:
                                 params,
                             )
                         return None
-                    return await response.read()
+                    image_bytes: bytes = await response.read()
+                    return image_bytes
 
         except asyncio.TimeoutError as err:
             _LOGGER.warning("2N camera snapshot timed out: %s", err)
@@ -1605,28 +1765,26 @@ class TwoNIntercomAPI:
         return self.port
 
     def get_rtsp_url(self) -> str:
-        """
-        Get RTSP stream URL.
-            
-        Returns:
-            RTSP URL with embedded credentials
-        """
-        # Redact password in logs
+        """Return RTSP stream URL with masked credentials for logging."""
         rtsp_port = self._get_rtsp_port()
-        return (
-            f"rtsp://{self.username}:****@{self.host}:{rtsp_port}/{RTSP_PATH}"
-        )
+        user = self.rtsp_username or ""
+        return f"rtsp://{user}:****@{self.host}:{rtsp_port}/{RTSP_PATH}"
 
-    def get_rtsp_url_with_credentials(self) -> str:
+    def get_rtsp_url_with_credentials(self) -> str | None:
+        """Return RTSP stream URL with real credentials.
+
+        Uses the dedicated RTSP credentials because the 2N RTSP server
+        has its own user database, independent of the HTTP API accounts.
+        Returns ``None`` when no RTSP credentials are configured so
+        callers can fall back to MJPEG.
         """
-        Get RTSP stream URL with credentials (for actual use).
-            
-        Returns:
-            RTSP URL with embedded credentials
-        """
+        if not self.rtsp_username or not self.rtsp_password:
+            return None
         rtsp_port = self._get_rtsp_port()
         return (
-            f"rtsp://{self.username}:{self.password}@{self.host}:{rtsp_port}/{RTSP_PATH}"
+            f"rtsp://{quote(self.rtsp_username, safe='')}:"
+            f"{quote(self.rtsp_password, safe='')}@"
+            f"{self.host}:{rtsp_port}/{RTSP_PATH}"
         )
 
 

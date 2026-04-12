@@ -132,6 +132,10 @@ class FakeCoordinator:
         self.call_state = "ringing"
         self.ring_active = True
         self.called_peer = "100"
+        self.system_caps = {"motionDetection": "inactive,licensed"}
+        self.motion_detection_available = False
+        self.motion_detected = False
+        self.last_motion_time = None
 
     @property
     def camera_transport_info(self):

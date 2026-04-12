@@ -12,14 +12,15 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 
+from .const import CONF_RTSP_PASSWORD, CONF_RTSP_USERNAME
 from .coordinator import TwoNIntercomRuntimeData
 
 if TYPE_CHECKING:
     from .coordinator import TwoNIntercomConfigEntry
 
-# Credentials for the device web API. Host/port are intentionally NOT
+# Credentials for the device web API and RTSP. Host/port are intentionally NOT
 # redacted because they're load-bearing for any meaningful triage.
-TO_REDACT_ENTRY = {CONF_USERNAME, CONF_PASSWORD}
+TO_REDACT_ENTRY = {CONF_USERNAME, CONF_PASSWORD, CONF_RTSP_USERNAME, CONF_RTSP_PASSWORD}
 
 
 async def async_get_config_entry_diagnostics(
@@ -47,6 +48,7 @@ async def async_get_config_entry_diagnostics(
         },
         "device": {
             "system_info": coordinator.system_info,
+            "system_caps": coordinator.system_caps,
             "phone_status": coordinator.phone_status,
             "switch_caps": coordinator.switch_caps,
             "switch_status": coordinator.switch_status,
@@ -58,6 +60,15 @@ async def async_get_config_entry_diagnostics(
             "call_state": coordinator.call_state,
             "ring_active": coordinator.ring_active,
             "called_peer": coordinator.called_peer,
+        },
+        "motion_detection": {
+            "available": coordinator.motion_detection_available,
+            "detected": coordinator.motion_detected,
+            "last_motion_time": (
+                coordinator.last_motion_time.isoformat()
+                if coordinator.last_motion_time is not None
+                else None
+            ),
         },
         "camera_transport": {
             "requested_mode": transport.requested_mode,

@@ -83,26 +83,6 @@
           "enable_doorbell": "Enable Doorbell"
         }
       },
-      "user": {
-        "title": "2N Intercom Options - Connection",
-        "description": "Update connection settings",
-        "data": {
-          "host": "IP Address",
-          "port": "Port",
-          "protocol": "Protocol",
-          "username": "Username",
-          "password": "Password",
-          "verify_ssl": "Verify SSL Certificate"
-        },
-        "data_description": {
-          "host": "IP address or hostname of the intercom",
-          "port": "HTTP/HTTPS port on the device",
-          "protocol": "Use HTTP or HTTPS based on device configuration",
-          "username": "Device login username for API access",
-          "password": "Device login password",
-          "verify_ssl": "Enable only if the HTTPS certificate is trusted"
-        }
-      },
       "device": {
         "title": "2N Intercom Options - Device",
         "description": "Update device features",
@@ -133,14 +113,18 @@
           "camera_source": "Camera source",
           "mjpeg_width": "MJPEG width (pixels)",
           "mjpeg_height": "MJPEG height (pixels)",
-          "mjpeg_fps": "MJPEG frame rate (fps)"
+          "mjpeg_fps": "MJPEG frame rate (fps)",
+          "rtsp_username": "RTSP username",
+          "rtsp_password": "RTSP password"
         },
         "data_description": {
-          "live_view_mode": "auto picks RTSP if available, then MJPEG, then JPEG snapshots only",
+          "live_view_mode": "auto picks RTSP when RTSP credentials are configured and valid, then MJPEG, then JPEG snapshots only",
           "camera_source": "Which sensor on the device to stream — internal is the built-in lens; external is a secondary camera module if fitted",
           "mjpeg_width": "Width of the MJPEG stream requested from the device (e.g. 640)",
           "mjpeg_height": "Height of the MJPEG stream requested from the device (e.g. 480)",
-          "mjpeg_fps": "Frames per second for the MJPEG stream (1-15)"
+          "mjpeg_fps": "Frames per second for the MJPEG stream (1-15)",
+          "rtsp_username": "Username for the 2N RTSP streaming service (configured separately from the HTTP API in the device web UI under Services > Streaming)",
+          "rtsp_password": "Password for the RTSP streaming service account"
         }
       },
       "relay": {
@@ -213,6 +197,9 @@
       },
       "relay_1_active": {
         "name": "Relay 1 active"
+      },
+      "motion": {
+        "name": "Motion"
       }
     },
     "sensor": {

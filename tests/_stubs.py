@@ -44,6 +44,8 @@ SENSOR_PATH = INTEGRATION_DIR / "sensor.py"
 LOCK_PATH = INTEGRATION_DIR / "lock.py"
 BINARY_SENSOR_PATH = INTEGRATION_DIR / "binary_sensor.py"
 CONFIG_FLOW_PATH = INTEGRATION_DIR / "config_flow.py"
+COVER_PATH = INTEGRATION_DIR / "cover.py"
+SWITCH_PATH = INTEGRATION_DIR / "switch.py"
 
 
 def ensure_package(name: str) -> types.ModuleType:
