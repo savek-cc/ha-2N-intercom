@@ -29,8 +29,8 @@ Home Assistant custom integration for 2N IP Intercom systems with camera, doorbe
 - HomeKit-compatible video doorbell
 
 ### Doorbell and call lifecycle
-- **Push-driven ring detection** via `/api/log/subscribe` + `/api/log/pull` background loop with automatic re-subscribe and exponential backoff
-- **Polling fallback** through `/api/call/status` when the push channel is degraded
+- **Event-driven ring detection** via `/api/log/subscribe` + `/api/log/pull` background loop with automatic re-subscribe and exponential backoff
+- **Event-driven state updates** for switches, IO, SIP registration, and device config changes via the same subscription channel
 - Binary sensor with caller name/number/button attributes
 - **`2n_intercom.answer_call`** and **`2n_intercom.hangup_call`** services that target a config entry and (optionally) a specific session id, with `reason` selector (`normal`/`rejected`/`busy`)
 - Diagnostic sensors: SIP registration status, call state with `active_session_id` attribute
@@ -53,7 +53,7 @@ Home Assistant custom integration for 2N IP Intercom systems with camera, doorbe
 
 | Category | Status | Notes |
 |---|---|---|
-| **Done** | JPEG snapshot, native MJPEG live view, RTSP stream source (when licensed), push-driven ring detection, polling fallback, relay switch/cover control with real device state, SIP/call diagnostic sensors, answer/hangup services, reauth and reconfigure flows, HomeKit bridge mapping | All verified against 2N IP Verso 2.50.0.76.2 |
+| **Done** | JPEG snapshot, native MJPEG live view, RTSP stream source (when licensed), event-driven ring/switch/IO/phone/config state, backup polling safety net, relay switch/cover control with real device state, SIP/call diagnostic sensors, answer/hangup services, reauth and reconfigure flows, HomeKit bridge mapping | All verified against 2N IP Verso 2.50.0.76.2 |
 | **Out of fork scope** | Two-way audio, multi-tenant directory UX, keypad workflow, lift control, mass-notify | Not needed for a single-family-house deployment |
 | **License-dependent** | Automation API, Audio Test, NFC, Noise Detection, SMTP, FTP, SNMP, TR069, Lift Control | Only available when the device license exposes them; not planned in this fork |
 
@@ -95,7 +95,7 @@ The integration provides optional **RTSP Username** and **RTSP Password** fields
 
 - **DataUpdateCoordinator** centralises polling, caching, and the background log listener
 - **MJPEG-first camera** built on `homeassistant.components.mjpeg.MjpegCamera`
-- **Static caps cached once** at setup (`switch/caps`, `io/caps`, camera transport); only status endpoints poll on the 5-second interval
+- **Event-driven + backup polling** — real-time state via log subscriptions; low-frequency polling (default 60 s) as a safety net
 - **`TwoNIntercomEntity`** base class shared by all platforms — single source for `device_info`, `available`, and `_attr_has_entity_name`
 - Platform-based: `camera`, `binary_sensor`, `switch`, `cover`, `sensor`
 
@@ -164,7 +164,7 @@ After initial setup, open the integration's **Options** (Settings → Devices & 
 
 The options flow has up to three steps:
 
-1. **Device** — name, feature toggles, polling interval, ringing account
+1. **Device** — name, feature toggles, backup polling interval, ringing account
 2. **Camera** *(only when camera is enabled)* — live view mode, RTSP credentials, MJPEG resolution/fps, camera source
 3. **Relay** *(one per auto-detected relay)* — name, device type (door/gate), pulse duration
 
@@ -173,7 +173,7 @@ The options flow has up to three steps:
 | Device | `name` | string | *(from setup)* | Display name |
 | Device | `enable_camera` | bool | `true` | Toggle camera entity |
 | Device | `enable_doorbell` | bool | `true` | Toggle doorbell entity |
-| Device | `scan_interval` | 2-300 (s) | 5 | Polling interval. Lower = faster ring detection, higher device load |
+| Device | `scan_interval` | 2-600 (s) | 60 | Backup polling interval. Events deliver real-time updates; polling only runs as a safety net |
 | Device | `called_id` | string | `All calls` | Ringing account / peer filter |
 | Camera | `live_view_mode` | `auto` \| `rtsp` \| `mjpeg` \| `jpeg_only` | `auto` | Camera live view transport. `auto` picks RTSP if licensed and RTSP credentials are set, then MJPEG, then snapshots |
 | Camera | `rtsp_username` | string | *(empty)* | RTSP server username (from the 2N RTSP user database, **not** the HTTP API account) |
@@ -267,7 +267,7 @@ The integration negotiates Basic vs Digest per request — see the **Authenticat
 | Endpoint | Purpose |
 |---|---|
 | `/api/system/info` | Device identity |
-| `/api/call/status` | Polling fallback for ring detection |
+| `/api/call/status` | Baseline call state (safety-net poll) |
 | `/api/call/answer`, `/api/call/hangup` | Service backends |
 | `/api/log/subscribe`, `/api/log/pull`, `/api/log/unsubscribe` | Push-driven event stream |
 | `/api/switch/caps`, `/api/switch/status`, `/api/switch/ctrl` | Relay control + cached state |
@@ -281,13 +281,13 @@ The integration negotiates Basic vs Digest per request — see the **Authenticat
 
 The integration uses two data channels:
 
-- **Push channel** — `/api/log/subscribe` + `/api/log/pull` long-poll loop. Delivers doorbell ring events within ~1 second. The listener auto-resubscribes with exponential backoff on failures
-- **Polling fallback** — the coordinator polls status endpoints (`switch/status`, `io/status`, `phone/status`, `call/status`) at the configured interval (default 5 seconds). This keeps ring detection alive when the push channel is degraded
-- **Static caps** — `switch/caps`, `io/caps`, and camera transport info are fetched once at setup and cached. Switch caps are refreshed every 5 minutes to detect relay enable/disable changes
+- **Event subscriptions (primary)** — `/api/log/subscribe` + `/api/log/pull` long-poll loop. Subscribes to `CallStateChanged`, `CallSessionStateChanged`, `SwitchStateChanged`, `InputChanged`, `OutputChanged`, `RegistrationStateChanged`, `ConfigurationChanged`, `CapabilitiesChanged`, `DeviceState`, and (when available) `MotionDetected`. State changes arrive within ~1 second. The listener auto-resubscribes with exponential backoff on failures and forces a full baseline refresh after each reconnect
+- **Backup polling (safety net)** — the coordinator polls status endpoints (`switch/status`, `io/status`, `phone/status`, `call/status`, `switch/caps`) at the configured interval (default 60 seconds). This catches any events missed during subscription gaps but does not perform ring detection — ring detection is exclusively event-driven
+- **Static caps** — `switch/caps`, `io/caps`, and camera transport info are fetched once at setup and cached. Switch caps are also refreshed on `ConfigurationChanged` / `CapabilitiesChanged` events and on every poll cycle as a safety net
 
 ## Use Cases
 
-- **Video doorbell** — camera snapshot + push-driven ring notification via mobile app
+- **Video doorbell** — camera snapshot + event-driven ring notification via mobile app
 - **Door opening** — trigger relay via switch entity from automations, dashboards, or HomeKit
 - **Gate control** — garage-door-style open/close via cover entity
 - **Call management** — answer or reject incoming calls from automations using the `answer_call` / `hangup_call` services
@@ -321,9 +321,10 @@ The integration uses two data channels:
 - If RTSP credentials are wrong, the integration logs a warning and falls back to MJPEG
 
 ### Doorbell not triggering
+- Ring detection is exclusively event-driven via the log subscription — there is no polling fallback for ring events
 - Open the integration's diagnostics; the log subscription id should be set
-- Press the button and watch HA logs — the push path should flip the binary sensor within ~1 s
-- The polling fallback (5 s) keeps ringing detection alive even if the push path drops
+- Press the button and watch HA logs — the event path should flip the binary sensor within ~1 s
+- If the subscription is down, the listener retries with exponential backoff (up to ~60 s). Ring events during a subscription gap are lost
 
 ### Reauth notification keeps appearing
 - Credentials really are wrong, or the device locked the account. Check the 2N web UI under **Services → HTTP API → Account** and re-enter the password through the reauth flow
@@ -358,7 +359,7 @@ custom_components/2n_intercom/
 ### Tests
 
 ```bash
-python3 -m unittest discover -s tests -t tests   # 411/411
+python3 -m unittest discover -s tests -t tests   # 442/442
 python3 validate.py                               # manifest + HACS compliance
 python3 -m py_compile custom_components/2n_intercom/*.py
 ```

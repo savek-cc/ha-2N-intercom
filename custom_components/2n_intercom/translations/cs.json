@@ -57,14 +57,14 @@
           "name": "Název",
           "enable_camera": "Povolit kameru",
           "enable_doorbell": "Povolit zvonek",
-          "scan_interval": "Interval dotazování (sekundy)",
+          "scan_interval": "Záložní interval dotazování (sekundy)",
           "called_id": "Volaný účet (peer)"
         },
         "data_description": {
           "name": "Zobrazený název v Home Assistant",
           "enable_camera": "Vytvoří entitu kamery",
           "enable_doorbell": "Vytvoří entitu zvonku",
-          "scan_interval": "Jak často integrace dotazuje zařízení na stav (2-300 s). Nižší hodnoty rychleji zachytí zvonění, ale více zatěžují zařízení.",
+          "scan_interval": "Záložní interval dotazování (2-600 s). Události přinášejí aktualizace v reálném čase; dotazování slouží jen jako záchranná síť. Výchozích 60 s vyhovuje většině instalací.",
           "called_id": "Vyberte účet, na který se zvoní. Všechny hovory = zvonění pro všechna tlačítka."
         }
       },

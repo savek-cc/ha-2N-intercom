@@ -61,14 +61,14 @@
           "name": "Name",
           "enable_camera": "Enable Camera",
           "enable_doorbell": "Enable Doorbell",
-          "scan_interval": "Polling interval (seconds)",
+          "scan_interval": "Backup polling interval (seconds)",
           "called_id": "Ringing account (peer)"
         },
         "data_description": {
           "name": "Displayed name in Home Assistant",
           "enable_camera": "Create the camera entity",
           "enable_doorbell": "Create the doorbell entity",
-          "scan_interval": "How often the integration polls the device for status (2-300 s). Lower values detect rings faster but increase device load.",
+          "scan_interval": "Backup polling interval (2-600 s). Events deliver real-time updates; polling only runs as a safety net. Default 60 s is fine for most setups.",
           "called_id": "Select which account should ring. Choose All calls to ring on every button."
         }
       },

@@ -46,9 +46,9 @@ DEFAULT_PROTOCOL = PROTOCOL_HTTPS
 DEFAULT_VERIFY_SSL = False
 DEFAULT_ENABLE_CAMERA = True
 DEFAULT_ENABLE_DOORBELL = True
-DEFAULT_SCAN_INTERVAL = 5  # seconds
+DEFAULT_SCAN_INTERVAL = 60  # seconds — events deliver real-time updates; polling is a safety net
 SCAN_INTERVAL_MIN = 2  # seconds — below this we hammer the device for no benefit
-SCAN_INTERVAL_MAX = 300  # seconds — 5 minutes is a sane upper bound for ring detection
+SCAN_INTERVAL_MAX = 600  # seconds — events handle real-time; polling only needs to catch missed updates
 DEFAULT_PULSE_DURATION = 2000  # milliseconds — door default
 DEFAULT_GATE_DURATION = 15000  # milliseconds — gate default
 

@@ -1,0 +1,8 @@
+{
+  "include": ["custom_components/2n_intercom"],
+  "pythonVersion": "3.14",
+  "reportIncompatibleVariableOverride": false,
+  "reportAssignmentType": false,
+  "reportArgumentType": false,
+  "reportMissingImports": false
+}

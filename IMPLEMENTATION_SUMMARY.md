@@ -4,7 +4,7 @@
 
 This integration drives a 2N IP Intercom from Home Assistant. It started as a basic lock entity, was redesigned around `DataUpdateCoordinator`, and was hardened against the 2N HTTP API 2.50 LTS for the **2N IP Verso** (firmware `2.50.0.76.2`) — a single-family-house deployment with no RTSP licence.
 
-The remediation pass that produced the current shape (version `1.1.0`) added MJPEG-first live view, push-driven event handling, real-state status entities, answer/hangup services, reauth + reconfigure flows, and HA 2026.4+ compliance.
+The remediation pass that produced the current shape added MJPEG-first live view, event-driven state handling, real-state status entities, answer/hangup services, reauth + reconfigure flows, and HA 2026.4+ compliance. The current version (`1.3.0`) extends event subscriptions to all state types (switch, IO, phone, config) and makes polling a low-frequency safety net.
 
 ## What is implemented
 
@@ -39,7 +39,7 @@ Validation happens against `system/info` so credential mistakes fail at the form
 
 #### Binary sensors (`binary_sensor.py`)
 
-- `TwoNIntercomDoorbell` — push-driven ring detection from the log subscription, polling fallback from `call/status`. Caller name/number/button + last ring timestamp attributes. Device class `OCCUPANCY` (HomeKit doorbell tile is provided by the linked-camera-accessory pattern, not the binary-sensor class)
+- `TwoNIntercomDoorbell` — event-driven ring detection from the log subscription (`CallStateChanged` / `CallSessionStateChanged`). Caller name/number/button + last ring timestamp attributes. Device class `OCCUPANCY` (HomeKit doorbell tile is provided by the linked-camera-accessory pattern, not the binary-sensor class). Ring detection is exclusively event-driven; the backup poll does not set ring state
 - `TwoNIntercomInput1Sensor` — real `io/status` input 1 state
 - `TwoNIntercomRelay1ActiveSensor` — real cached `switch/status` relay 1 active flag
 
@@ -66,7 +66,7 @@ The auth scheme for each endpoint is determined by the 2N device's web-UI **Serv
 | Endpoint | Purpose |
 |---|---|
 | `/api/system/info` | Device identity, credential validation |
-| `/api/call/status` | Polling fallback for ring detection |
+| `/api/call/status` | Baseline call state (safety-net poll) |
 | `/api/call/answer`, `/api/call/hangup` | Service backends |
 | `/api/log/subscribe`, `/api/log/pull`, `/api/log/unsubscribe` | Push-driven event channel |
 | `/api/log/caps` | Discover supported event names |
@@ -107,7 +107,7 @@ Both translations cover all config / options / reauth / reconfigure / abort / pr
 - All Python files compile cleanly (`python3 -m py_compile`)
 - All JSON files validate
 - `validate.py` enforces manifest compliance (`requirements: []`, `iot_class: local_push`, `integration_type: device`, `config_flow: true`, `version` present) and HACS HA min version (`2026.4.x`)
-- 75/75 unit tests passing (`unittest.IsolatedAsyncioTestCase` + hand-rolled HA stubs, no `pytest-homeassistant-custom-component`)
+- 442 unit tests passing (`unittest.IsolatedAsyncioTestCase` + hand-rolled HA stubs, no `pytest-homeassistant-custom-component`)
 
 ## Entity summary
 
@@ -145,21 +145,21 @@ If credentials later become invalid, HA automatically opens the **reauth** flow.
 - All HTTP I/O is async via aiohttp
 - Single coordinator owns polling, caching, and the log subscription loop
 - Static caps (`switch/caps`, `io/caps`, camera transport) are fetched **once** at setup, not on every poll
-- The 5-second poll interval drives only status endpoints (`switch/status`, `io/status`, `phone/status`, `call/status`)
+- Events are the primary data path; the backup poll (default 60 s) refreshes all status endpoints as a safety net
 
 ### Error handling and resilience
 
 - `ConfigEntryAuthFailed` on credential rejection → reauth flow
 - Persistent notification API uses the imported module (the legacy `hass.components.X` accessor was removed in HA 2025.1)
 - Log listener loop catches subscribe failures and re-subscribes with exponential backoff (capped at ~60 s)
-- Polling fallback keeps ringing detection alive even when the push channel is degraded
+- On subscription reconnect, a full baseline refresh closes any gap from missed events
 - Coordinator constructed with `config_entry=` so HA tags traces with the entry
 
 ### Performance
 
 - Snapshot caching at the coordinator (single layer)
 - Static caps cached once, not refetched per poll
-- Push-driven events when available (no polling latency for ring detection)
+- Event-driven state for all entity types (no polling latency for real-time updates)
 - `MjpegCamera` serves frames natively to the HA frontend — no ffmpeg / HLS
 
 ### Compliance with HA 2026.4+
@@ -167,7 +167,7 @@ If credentials later become invalid, HA automatically opens the **reauth** flow.
 - Imported `homeassistant.components.persistent_notification` API
 - OptionsFlow does not store `config_entry` (uses `self.config_entry` from the framework)
 - `DataUpdateCoordinator` constructed with the `config_entry` kwarg
-- `manifest.json`: `requirements: []`, `iot_class: local_push`, `integration_type: device`, `version: 1.1.0`
+- `manifest.json`: `requirements: []`, `iot_class: local_push`, `integration_type: device`, `version: 1.3.0`
 - `hacs.json`: `homeassistant: 2026.4.0`
 
 ## What's intentionally **not** implemented
@@ -181,7 +181,7 @@ These belong outside the fork or to a separate licence:
 
 ## Breaking changes
 
-### From 1.0.x → 1.1.0
+### From 1.0.x → 1.3.0
 
 - Camera entity is now backed by `MjpegCamera` — credentials are no longer embedded in stream URLs. Anything reading the previous credential-leaking URL out of HA logs/diagnostics needs to be updated; the camera entity itself works the same in dashboards and HomeKit
 - Auth failures now raise `ConfigEntryAuthFailed` instead of looping on `ConfigEntryNotReady` + persistent notification — you'll see a reauth notification instead
@@ -192,28 +192,28 @@ No data-model breakage; existing config entries load unchanged.
 ## Testing
 
 ```bash
-python3 -m unittest discover -s tests -t tests   # 75/75
+python3 -m unittest discover -s tests -t tests   # 442/442
 python3 validate.py                               # all green
 python3 -m py_compile custom_components/2n_intercom/*.py
 ```
 
 End-to-end live verification is done with the standalone scripts under the upstream working tree (e.g. `verify_2n_hangup_live.py`, `verify_door_open_hangup.py`) — they hit a real device, drive a doorbell ring via `/api/sim/keypress`, and validate the full ring → answer → hangup loop against HA.
 
-## Statistics (as of 1.1.0)
+## Statistics (as of 1.3.0)
 
 - **Platforms:** 5 (camera, binary_sensor, sensor, switch, cover)
 - **APIs:** 11 endpoint families (auth scheme determined by device per service group)
 - **Services:** 2 (`answer_call`, `hangup_call`)
 - **Languages:** 3 (English, German, Czech)
-- **Tests:** 75 unit tests
+- **Tests:** 442 unit tests
 - **HA target:** 2026.4.0+
 
 ## Conclusion
 
-The integration is feature-complete for the single-family-house IP Verso baseline: native MJPEG live view, push-driven ring detection with polling fallback, real-state status entities, answer/hangup services, reauth + reconfigure flows, and HA 2026.4+ compliance — all without ffmpeg in the camera path and without leaking credentials into logs.
+The integration is feature-complete for the single-family-house IP Verso baseline: native MJPEG live view, event-driven state updates (ring, switch, IO, phone, config) with backup polling safety net, real-state status entities, answer/hangup services, reauth + reconfigure flows, and HA 2026.4+ compliance — all without ffmpeg in the camera path and without leaking credentials into logs.
 
 ---
 
 *Status:* Production-ready against 2N IP Verso firmware `2.50.0.76.2`
-*Version:* 1.1.0
+*Version:* 1.3.0
 *Repository:* [savek-cc/ha-2N-intercom](https://github.com/savek-cc/ha-2N-intercom) (fork of [mastalir1980/ha-2N-intercom](https://github.com/mastalir1980/ha-2N-intercom))

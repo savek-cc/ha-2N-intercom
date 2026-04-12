@@ -51,10 +51,6 @@ except ImportError:  # pragma: no cover - test stub fallback
 
 _LOGGER = logging.getLogger(__name__)
 
-# How often to re-fetch /api/switch/caps (relay enable/disable changes).
-# Caps are quasi-static config — no need to poll every 2s update cycle.
-_SWITCH_CAPS_REFRESH_INTERVAL = timedelta(minutes=5)
-
 
 @dataclass
 class TwoNIntercomRuntimeData:
@@ -148,7 +144,6 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
         self._system_info: dict[str, Any] | None = None
         self._phone_status: dict[str, Any] | None = None
         self._switch_caps: dict[str, Any] | None = None
-        self._switch_caps_last_refresh: datetime | None = None
         self._switch_status: dict[str, Any] | None = None
         self._io_caps: dict[str, Any] | None = None
         self._io_status: dict[str, Any] | None = None
@@ -268,6 +263,130 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
             return True
         return False
 
+    def _process_switch_state_event(self, params: dict[str, Any]) -> bool:
+        """Handle a SwitchStateChanged log event.
+
+        Patches the cached ``_switch_status`` in-place so entities reflect
+        the relay state change without waiting for the next poll cycle.
+        """
+        if not isinstance(params, dict):
+            return False
+        switch_num = params.get("switch")
+        state = params.get("state")
+        if not isinstance(switch_num, int) or not isinstance(state, bool):
+            return False
+        if self._switch_status is None:
+            self.hass.async_create_task(self.async_request_refresh())
+            return False
+        switches = self._switch_status.get("switches") or []
+        for entry in switches:
+            if isinstance(entry, dict) and entry.get("switch") == switch_num:
+                entry["active"] = state
+                return True
+        return False
+
+    def _process_input_changed_event(self, params: dict[str, Any]) -> bool:
+        """Handle an InputChanged log event.
+
+        Patches the cached ``_io_status`` in-place for the matching input port.
+        """
+        if not isinstance(params, dict):
+            return False
+        port = params.get("port")
+        state = params.get("state")
+        if port is None or not isinstance(state, bool):
+            return False
+        port_str = str(port)
+        if self._io_status is None:
+            self.hass.async_create_task(self.async_request_refresh())
+            return False
+        ports = self._io_status.get("ports") or []
+        for entry in ports:
+            if isinstance(entry, dict) and str(entry.get("port")) == port_str:
+                entry["state"] = state
+                return True
+        return False
+
+    def _process_output_changed_event(self, params: dict[str, Any]) -> bool:
+        """Handle an OutputChanged log event.
+
+        Patches the cached ``_io_status`` in-place for the matching output port.
+        """
+        if not isinstance(params, dict):
+            return False
+        port = params.get("port")
+        state = params.get("state")
+        if port is None or not isinstance(state, bool):
+            return False
+        port_str = str(port)
+        if self._io_status is None:
+            self.hass.async_create_task(self.async_request_refresh())
+            return False
+        ports = self._io_status.get("ports") or []
+        for entry in ports:
+            if isinstance(entry, dict) and str(entry.get("port")) == port_str:
+                entry["state"] = state
+                return True
+        return False
+
+    def _process_registration_event(self, params: dict[str, Any]) -> bool:
+        """Handle a RegistrationStateChanged log event.
+
+        Patches the cached ``_phone_status`` in-place for the matching SIP
+        account so the phone sensor reflects registration changes immediately.
+        """
+        if not isinstance(params, dict):
+            return False
+        sip_account = params.get("sipAccount")
+        state = params.get("state")
+        if sip_account is None or not isinstance(state, str):
+            return False
+        if self._phone_status is None:
+            self.hass.async_create_task(self.async_request_refresh())
+            return False
+        accounts = self._phone_status.get("accounts") or []
+        for entry in accounts:
+            if isinstance(entry, dict) and entry.get("sipAccount") == sip_account:
+                entry["state"] = state
+                return True
+        return False
+
+    def _process_config_changed_event(self) -> bool:
+        """Handle a ConfigurationChanged or CapabilitiesChanged log event.
+
+        Schedules an async caps refresh so dynamic entity add/remove picks up
+        newly enabled or disabled relays and IO ports.
+        """
+        self.hass.async_create_task(self._async_refresh_caps_from_event())
+        return False  # async task handles notification
+
+    async def _async_refresh_caps_from_event(self) -> None:
+        """Refresh switch and IO caps, then notify listeners."""
+        await self._refresh_secondary_cache(
+            "_switch_caps", "async_get_switch_caps", "switch caps",
+        )
+        await self._refresh_secondary_cache(
+            "_io_caps", "async_get_io_caps", "io caps",
+        )
+        if hasattr(self, "async_update_listeners"):
+            self.async_update_listeners()
+
+    def _process_device_state_event(self, params: dict[str, Any]) -> bool:
+        """Handle a DeviceState log event.
+
+        A ``state == "startup"`` means the device just rebooted. Schedule a
+        full refresh to re-establish baseline state. The server-side
+        subscription is killed by the reboot, so the pull loop will error
+        out and the outer loop will resubscribe automatically.
+        """
+        if not isinstance(params, dict):
+            return False
+        state = str(params.get("state") or "").strip().lower()
+        if state == "startup":
+            _LOGGER.info("Device startup detected; scheduling baseline refresh")
+            self.hass.async_create_task(self.async_request_refresh())
+        return False
+
     def _process_log_event(self, event: dict[str, Any]) -> bool:
         """Apply a supported log event to coordinator state."""
         if not isinstance(event, dict):
@@ -277,6 +396,19 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
 
         if event_name == "MotionDetected":
             return self._process_motion_event(event)
+
+        if event_name == "SwitchStateChanged":
+            return self._process_switch_state_event(event.get("params") or {})
+        if event_name == "InputChanged":
+            return self._process_input_changed_event(event.get("params") or {})
+        if event_name == "OutputChanged":
+            return self._process_output_changed_event(event.get("params") or {})
+        if event_name == "RegistrationStateChanged":
+            return self._process_registration_event(event.get("params") or {})
+        if event_name in ("ConfigurationChanged", "CapabilitiesChanged"):
+            return self._process_config_changed_event()
+        if event_name == "DeviceState":
+            return self._process_device_state_event(event.get("params") or {})
 
         if event_name not in {"CallStateChanged", "CallSessionStateChanged"}:
             return False
@@ -349,21 +481,6 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
 
         self._last_call_state_value = state
 
-        current: TwoNIntercomData | None = self.data  # type: ignore[has-type]
-        if current is not None:
-            self.data = TwoNIntercomData(
-                call_status=current.call_status,
-                last_ring_time=self._last_ring_time,
-                caller_info=current.caller_info,
-                active_session_id=self._active_session_id,
-                available=current.available,
-                phone_status=current.phone_status,
-                switch_caps=current.switch_caps,
-                switch_status=current.switch_status,
-                io_caps=current.io_caps,
-                io_status=current.io_status,
-            )
-
         return True
 
     async def _async_run_log_subscription(self, subscription_id: int) -> None:
@@ -382,8 +499,23 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
             for event in events:
                 updated = self._process_log_event(event) or updated
 
-            if updated and hasattr(self, "async_update_listeners"):
-                self.async_update_listeners()
+            if updated:
+                current: TwoNIntercomData | None = self.data  # type: ignore[has-type]
+                if current is not None:
+                    self.data = TwoNIntercomData(
+                        call_status=current.call_status,
+                        last_ring_time=self._last_ring_time,
+                        caller_info=current.caller_info,
+                        active_session_id=self._active_session_id,
+                        available=True,
+                        phone_status=self._phone_status or {},
+                        switch_caps=self._switch_caps or {},
+                        switch_status=self._switch_status or {},
+                        io_caps=self._io_caps or {},
+                        io_status=self._io_status or {},
+                    )
+                if hasattr(self, "async_update_listeners"):
+                    self.async_update_listeners()
 
             # Yield to the loop; the device blocks server-side via timeout=1
             # so this does not become a busy-loop on the success path.
@@ -395,7 +527,17 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
         while not self._log_listener_stopped:
             subscription_id: int | None = None
             try:
-                log_events = ["CallStateChanged", "CallSessionStateChanged"]
+                log_events = [
+                    "CallStateChanged",
+                    "CallSessionStateChanged",
+                    "SwitchStateChanged",
+                    "InputChanged",
+                    "OutputChanged",
+                    "RegistrationStateChanged",
+                    "ConfigurationChanged",
+                    "CapabilitiesChanged",
+                    "DeviceState",
+                ]
                 if self.motion_detection_available:
                     log_events.append("MotionDetected")
                 subscription_id = await self.api.async_subscribe_log(log_events)
@@ -419,6 +561,9 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
             )
             self._log_subscription_id = subscription_id
             backoff = LOG_LISTENER_INITIAL_BACKOFF
+            # Re-establish baseline state after (re)connection
+            _LOGGER.debug("Subscription established; forcing baseline refresh")
+            self.hass.async_create_task(self.async_request_refresh())
 
             try:
                 await self._async_run_log_subscription(subscription_id)
@@ -648,24 +793,14 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
                 "async_get_phone_status",
                 "phone status",
             )
-            # switch_caps is quasi-static config (relay enable/disable);
-            # refresh only every _SWITCH_CAPS_REFRESH_INTERVAL to avoid
-            # hammering the device with ~17k extra requests/day.
-            now = datetime.now()
-            if (
-                self._switch_caps is None
-                or self._switch_caps_last_refresh is None
-                or (now - self._switch_caps_last_refresh)
-                >= _SWITCH_CAPS_REFRESH_INTERVAL
-            ):
-                switch_caps = await self._refresh_secondary_cache(
-                    "_switch_caps",
-                    "async_get_switch_caps",
-                    "switch caps",
-                )
-                self._switch_caps_last_refresh = now
-            else:
-                switch_caps = self._switch_caps
+            # switch_caps: fetched at startup, refreshed on
+            # ConfigurationChanged/CapabilitiesChanged events, and
+            # unconditionally on every poll cycle as a safety net.
+            switch_caps = await self._refresh_secondary_cache(
+                "_switch_caps",
+                "async_get_switch_caps",
+                "switch caps",
+            )
             switch_status = await self._refresh_secondary_cache(
                 "_switch_status",
                 "async_get_switch_status",
@@ -690,44 +825,18 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
 
             # Reset retry count on successful update
             self._retry_count = 0
-            
-            # Detect ring events
+
+            # Baseline state capture — ring detection is event-driven via
+            # CallStateChanged / CallSessionStateChanged subscriptions;
+            # the poll only refreshes session and peer baselines.
             current_state = self._extract_call_state(call_status) or "idle"
-            previous_state = self._last_call_state_value or "idle"
-            called_peer_raw = self._extract_called_peer(call_status)
-            active_session_id = self._extract_active_session_id(call_status)
-            self._active_session_id = active_session_id
-            self._last_called_peer = self._normalize_peer(called_peer_raw)
-            ring_allowed = (
-                self._ring_filter_peer is None
-                or self._last_called_peer == self._ring_filter_peer
+            self._active_session_id = self._extract_active_session_id(call_status)
+            self._last_called_peer = self._normalize_peer(
+                self._extract_called_peer(call_status)
             )
-            current_state_norm = str(current_state).lower()
-            previous_state_norm = str(previous_state).lower()
-            is_ringing = current_state_norm in self._RING_STATES
-            was_ringing = previous_state_norm in self._RING_STATES
-            
-            # Ring detection: state changes to a ringing state
-            if is_ringing and ring_allowed:
-                if not was_ringing or not self._ring_detected:
-                    self._ring_detected = True
-                    self._last_ring_time = datetime.now()
-                    self._ring_pulse_until = (
-                        self._last_ring_time
-                        + timedelta(seconds=DOORBELL_PULSE_DURATION)
-                    )
-                    _LOGGER.info("Doorbell ring detected")
-            elif is_ringing and not ring_allowed:
-                self._ring_detected = False
-            elif not is_ringing:
-                # Reset ring detection when call ends
-                if self._ring_detected:
-                    self._ring_detected = False
-                    self._ring_pulse_until = None
-            
             self._last_call_state = call_status
             self._last_call_state_value = current_state
-            
+
             # Extract caller info
             caller_info = call_status.get("caller", {})
             
@@ -735,7 +844,7 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
                 call_status=call_status,
                 last_ring_time=self._last_ring_time,
                 caller_info=caller_info if caller_info else None,
-                active_session_id=active_session_id,
+                active_session_id=self._active_session_id,
                 available=True,
                 phone_status=phone_status,
                 switch_caps=switch_caps,
@@ -841,15 +950,13 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
         """Force an immediate refresh of switch capabilities.
 
         Call this after learning that the device configuration changed
-        (e.g. via a log event) to pick up new relays without waiting
-        for the next 5-minute interval.
+        (e.g. via a log event) to pick up new relays immediately.
         """
         await self._refresh_secondary_cache(
             "_switch_caps",
             "async_get_switch_caps",
             "switch caps",
         )
-        self._switch_caps_last_refresh = datetime.now()
         self.async_set_updated_data(self.data)
 
     @property

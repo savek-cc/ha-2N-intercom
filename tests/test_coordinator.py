@@ -1240,8 +1240,8 @@ class AsyncUpdateDataErrorTests(unittest.IsolatedAsyncioTestCase):
         data = await c._async_update_data()
         self.assertEqual(c._system_info, {})
 
-    async def test_ring_not_allowed_clears_detection(self) -> None:
-        """Ring detected but peer filter doesn't match → clear."""
+    async def test_poll_captures_baseline_state(self) -> None:
+        """Polling captures session id, peer, and call state baseline."""
         api = self._base_api()
 
         async def ringing_call():
@@ -1256,18 +1256,21 @@ class AsyncUpdateDataErrorTests(unittest.IsolatedAsyncioTestCase):
         api.async_get_call_status = ringing_call
 
         hass = types.SimpleNamespace()
-        c = self.coordinator_module.TwoNIntercomCoordinator(
-            hass, api, called_id="sip:200@x"
-        )
+        c = self.coordinator_module.TwoNIntercomCoordinator(hass, api)
 
         data = await c._async_update_data()
         c.data = data
-        self.assertFalse(c._ring_detected)
 
-    async def test_ring_detected_then_cleared(self) -> None:
+        # Polling captures baseline state but does NOT do ring detection
+        self.assertEqual(c._active_session_id, "s1")
+        self.assertEqual(c._last_called_peer, "100")
+        self.assertEqual(c._last_call_state_value, "ringing")
+        self.assertFalse(c._ring_detected)  # ring detection is event-only
+
+    async def test_poll_does_not_set_ring_detected(self) -> None:
+        """Polling never sets _ring_detected; that's event-driven only."""
         call_count = 0
         api = self._base_api()
-        original_call = api.async_get_call_status
 
         async def changing_call():
             nonlocal call_count
@@ -1289,12 +1292,14 @@ class AsyncUpdateDataErrorTests(unittest.IsolatedAsyncioTestCase):
 
         data1 = await c._async_update_data()
         c.data = data1
-        self.assertTrue(c._ring_detected)
+        # Polling does not trigger ring detection
+        self.assertFalse(c._ring_detected)
+        self.assertEqual(c._last_call_state_value, "ringing")
 
         data2 = await c._async_update_data()
         c.data = data2
         self.assertFalse(c._ring_detected)
-        self.assertIsNone(c._ring_pulse_until)
+        self.assertEqual(c._last_call_state_value, "idle")
 
 
 class PropertyTests(unittest.IsolatedAsyncioTestCase):
@@ -1645,3 +1650,353 @@ class NormalizePeerTests(unittest.TestCase):
 
     def test_whitespace_only(self) -> None:
         self.assertIsNone(self._normalize("   "))
+
+
+class EventDrivenHandlerTests(unittest.IsolatedAsyncioTestCase):
+    """Tests for event-driven state handlers (SwitchStateChanged, etc.)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.coordinator_module = load_coordinator_module()
+
+    def _make_coordinator(self, **kwargs):
+        refresh_calls = []
+
+        async def fake_request_refresh():
+            refresh_calls.append(True)
+
+        hass = types.SimpleNamespace(
+            async_create_task=lambda coro: asyncio.ensure_future(coro),
+        )
+        api = types.SimpleNamespace()
+        c = self.coordinator_module.TwoNIntercomCoordinator(hass, api, **kwargs)
+        c.async_request_refresh = fake_request_refresh
+        c._refresh_calls = refresh_calls
+        return c
+
+    # --- SwitchStateChanged ---
+
+    def test_process_switch_state_event(self) -> None:
+        c = self._make_coordinator()
+        c._switch_status = {
+            "switches": [
+                {"switch": 1, "active": False},
+                {"switch": 2, "active": False},
+            ]
+        }
+        result = c._process_switch_state_event({"switch": 1, "state": True})
+        self.assertTrue(result)
+        self.assertTrue(c._switch_status["switches"][0]["active"])
+        self.assertFalse(c._switch_status["switches"][1]["active"])
+
+    def test_process_switch_state_event_no_baseline(self) -> None:
+        c = self._make_coordinator()
+        c._switch_status = None
+        result = c._process_switch_state_event({"switch": 1, "state": True})
+        self.assertFalse(result)
+
+    def test_process_switch_state_event_bad_params(self) -> None:
+        c = self._make_coordinator()
+        c._switch_status = {"switches": [{"switch": 1, "active": False}]}
+        self.assertFalse(c._process_switch_state_event({"switch": "bad", "state": True}))
+        self.assertFalse(c._process_switch_state_event({"switch": 1, "state": "yes"}))
+        self.assertFalse(c._process_switch_state_event("not a dict"))
+
+    def test_process_switch_state_event_unknown_switch(self) -> None:
+        c = self._make_coordinator()
+        c._switch_status = {"switches": [{"switch": 1, "active": False}]}
+        result = c._process_switch_state_event({"switch": 99, "state": True})
+        self.assertFalse(result)
+
+    # --- InputChanged ---
+
+    def test_process_input_changed_event(self) -> None:
+        c = self._make_coordinator()
+        c._io_status = {
+            "ports": [
+                {"port": "input1", "state": False},
+                {"port": "input2", "state": False},
+            ]
+        }
+        result = c._process_input_changed_event({"port": "input1", "state": True})
+        self.assertTrue(result)
+        self.assertTrue(c._io_status["ports"][0]["state"])
+        self.assertFalse(c._io_status["ports"][1]["state"])
+
+    def test_process_input_changed_event_no_baseline(self) -> None:
+        c = self._make_coordinator()
+        c._io_status = None
+        result = c._process_input_changed_event({"port": "input1", "state": True})
+        self.assertFalse(result)
+
+    # --- OutputChanged ---
+
+    def test_process_output_changed_event(self) -> None:
+        c = self._make_coordinator()
+        c._io_status = {
+            "ports": [
+                {"port": "relay1", "state": False},
+            ]
+        }
+        result = c._process_output_changed_event({"port": "relay1", "state": True})
+        self.assertTrue(result)
+        self.assertTrue(c._io_status["ports"][0]["state"])
+
+    def test_process_output_changed_event_no_baseline(self) -> None:
+        c = self._make_coordinator()
+        c._io_status = None
+        result = c._process_output_changed_event({"port": "relay1", "state": True})
+        self.assertFalse(result)
+
+    # --- RegistrationStateChanged ---
+
+    def test_process_registration_event(self) -> None:
+        c = self._make_coordinator()
+        c._phone_status = {
+            "accounts": [
+                {"sipAccount": 1, "state": "registered"},
+                {"sipAccount": 2, "state": "registered"},
+            ]
+        }
+        result = c._process_registration_event({"sipAccount": 1, "state": "unregistered"})
+        self.assertTrue(result)
+        self.assertEqual(c._phone_status["accounts"][0]["state"], "unregistered")
+        self.assertEqual(c._phone_status["accounts"][1]["state"], "registered")
+
+    def test_process_registration_event_no_baseline(self) -> None:
+        c = self._make_coordinator()
+        c._phone_status = None
+        result = c._process_registration_event({"sipAccount": 1, "state": "unregistered"})
+        self.assertFalse(result)
+
+    def test_process_registration_event_bad_params(self) -> None:
+        c = self._make_coordinator()
+        c._phone_status = {"accounts": [{"sipAccount": 1, "state": "registered"}]}
+        self.assertFalse(c._process_registration_event({"sipAccount": 1, "state": 42}))
+        self.assertFalse(c._process_registration_event({"state": "registered"}))
+
+    # --- ConfigurationChanged / CapabilitiesChanged ---
+
+    async def test_process_config_changed_event(self) -> None:
+        caps_refreshed = []
+
+        async def fake_refresh(cache_attr, method_name, label, **kw):
+            caps_refreshed.append(cache_attr)
+            return {}
+
+        c = self._make_coordinator()
+        c._refresh_secondary_cache = fake_refresh
+        result = c._process_config_changed_event()
+        self.assertFalse(result)  # returns False (async task handles it)
+        # Let the scheduled task run
+        await asyncio.sleep(0.05)
+        self.assertIn("_switch_caps", caps_refreshed)
+        self.assertIn("_io_caps", caps_refreshed)
+
+    # --- DeviceState ---
+
+    async def test_process_device_state_startup(self) -> None:
+        c = self._make_coordinator()
+        result = c._process_device_state_event({"state": "startup"})
+        self.assertFalse(result)
+        # Let the scheduled refresh task run
+        await asyncio.sleep(0.05)
+        self.assertTrue(len(c._refresh_calls) > 0)
+
+    def test_process_device_state_non_startup(self) -> None:
+        c = self._make_coordinator()
+        result = c._process_device_state_event({"state": "running"})
+        self.assertFalse(result)
+
+    def test_process_device_state_bad_params(self) -> None:
+        c = self._make_coordinator()
+        result = c._process_device_state_event("not a dict")
+        self.assertFalse(result)
+
+    # --- Event dispatch via _process_log_event ---
+
+    def test_dispatch_switch_state_changed(self) -> None:
+        c = self._make_coordinator()
+        c._switch_status = {"switches": [{"switch": 1, "active": False}]}
+        result = c._process_log_event({
+            "event": "SwitchStateChanged",
+            "params": {"switch": 1, "state": True},
+        })
+        self.assertTrue(result)
+        self.assertTrue(c._switch_status["switches"][0]["active"])
+
+    def test_dispatch_input_changed(self) -> None:
+        c = self._make_coordinator()
+        c._io_status = {"ports": [{"port": "input1", "state": False}]}
+        result = c._process_log_event({
+            "event": "InputChanged",
+            "params": {"port": "input1", "state": True},
+        })
+        self.assertTrue(result)
+
+    def test_dispatch_output_changed(self) -> None:
+        c = self._make_coordinator()
+        c._io_status = {"ports": [{"port": "relay1", "state": False}]}
+        result = c._process_log_event({
+            "event": "OutputChanged",
+            "params": {"port": "relay1", "state": True},
+        })
+        self.assertTrue(result)
+
+    def test_dispatch_registration_state_changed(self) -> None:
+        c = self._make_coordinator()
+        c._phone_status = {"accounts": [{"sipAccount": 1, "state": "registered"}]}
+        result = c._process_log_event({
+            "event": "RegistrationStateChanged",
+            "params": {"sipAccount": 1, "state": "unregistered"},
+        })
+        self.assertTrue(result)
+
+    # --- Subscription filter completeness ---
+
+    async def test_log_listener_subscribes_all_events(self) -> None:
+        subscribed_events = []
+
+        class FakeAPI:
+            async def async_subscribe_log(self, events):
+                subscribed_events.extend(events)
+                return 1
+
+            async def async_pull_log(self, sub_id, timeout=1):
+                raise RuntimeError("stop")
+
+            async def async_unsubscribe_log(self, sub_id):
+                pass
+
+        hass = types.SimpleNamespace(
+            async_create_task=lambda coro: asyncio.ensure_future(coro),
+        )
+        api = FakeAPI()
+        c = self.coordinator_module.TwoNIntercomCoordinator(hass, api)
+        c._system_caps = {"motionDetection": "active,licensed"}
+
+        async def stop_soon():
+            await asyncio.sleep(0.05)
+            c._log_listener_stopped = True
+
+        task = asyncio.create_task(c._async_log_listener_loop())
+        stopper = asyncio.create_task(stop_soon())
+        await asyncio.gather(task, stopper, return_exceptions=True)
+
+        expected = {
+            "CallStateChanged",
+            "CallSessionStateChanged",
+            "SwitchStateChanged",
+            "InputChanged",
+            "OutputChanged",
+            "RegistrationStateChanged",
+            "ConfigurationChanged",
+            "CapabilitiesChanged",
+            "DeviceState",
+            "MotionDetected",
+        }
+        self.assertEqual(set(subscribed_events), expected)
+
+    # --- Reconnect triggers baseline refresh ---
+
+    async def test_reconnect_triggers_baseline_refresh(self) -> None:
+        refresh_calls = []
+
+        class FakeAPI:
+            def __init__(self):
+                self.sub_count = 0
+
+            async def async_subscribe_log(self, events):
+                self.sub_count += 1
+                return self.sub_count
+
+            async def async_pull_log(self, sub_id, timeout=1):
+                raise RuntimeError("stop pull")
+
+            async def async_unsubscribe_log(self, sub_id):
+                pass
+
+        async def fake_refresh():
+            refresh_calls.append(True)
+
+        hass = types.SimpleNamespace(
+            async_create_task=lambda coro: asyncio.ensure_future(coro),
+        )
+        api = FakeAPI()
+        c = self.coordinator_module.TwoNIntercomCoordinator(hass, api)
+        c.async_request_refresh = fake_refresh
+
+        coord_mod = sys.modules["custom_components.2n_intercom.coordinator"]
+        orig_initial = coord_mod.LOG_LISTENER_INITIAL_BACKOFF
+        coord_mod.LOG_LISTENER_INITIAL_BACKOFF = 0.01
+
+        try:
+            async def stop_soon():
+                await asyncio.sleep(0.1)
+                c._log_listener_stopped = True
+
+            task = asyncio.create_task(c._async_log_listener_loop())
+            stopper = asyncio.create_task(stop_soon())
+            await asyncio.gather(task, stopper, return_exceptions=True)
+
+            # Should have called refresh at least once on subscription establishment
+            self.assertGreater(len(refresh_calls), 0)
+        finally:
+            coord_mod.LOG_LISTENER_INITIAL_BACKOFF = orig_initial
+
+    # --- Data rebuild from caches on event ---
+
+    async def test_event_rebuilds_data_from_caches(self) -> None:
+        c = self._make_coordinator()
+        # Seed initial data
+        c.data = self.coordinator_module.TwoNIntercomData(
+            call_status={"state": "idle"},
+            last_ring_time=None,
+            caller_info=None,
+            active_session_id=None,
+            available=True,
+            phone_status={"accounts": [{"sipAccount": 1, "state": "registered"}]},
+            switch_caps={"switches": [{"switch": 1, "enabled": True}]},
+            switch_status={"switches": [{"switch": 1, "active": False}]},
+            io_caps={},
+            io_status={"ports": [{"port": "relay1", "state": False}]},
+        )
+        # Seed caches
+        c._phone_status = {"accounts": [{"sipAccount": 1, "state": "registered"}]}
+        c._switch_caps = {"switches": [{"switch": 1, "enabled": True}]}
+        c._switch_status = {"switches": [{"switch": 1, "active": False}]}
+        c._io_caps = {}
+        c._io_status = {"ports": [{"port": "relay1", "state": False}]}
+
+        # Simulate pull loop processing a SwitchStateChanged event
+        events = [{
+            "event": "SwitchStateChanged",
+            "params": {"switch": 1, "state": True},
+        }]
+
+        # Simulate _async_run_log_subscription logic
+        updated = False
+        for event in events:
+            updated = c._process_log_event(event) or updated
+
+        self.assertTrue(updated)
+
+        # Rebuild data (mimicking centralized rebuild)
+        if updated:
+            current = c.data
+            if current is not None:
+                c.data = self.coordinator_module.TwoNIntercomData(
+                    call_status=current.call_status,
+                    last_ring_time=c._last_ring_time,
+                    caller_info=current.caller_info,
+                    active_session_id=c._active_session_id,
+                    available=True,
+                    phone_status=c._phone_status or {},
+                    switch_caps=c._switch_caps or {},
+                    switch_status=c._switch_status or {},
+                    io_caps=c._io_caps or {},
+                    io_status=c._io_status or {},
+                )
+
+        # Verify the rebuilt data reflects the cache patch
+        self.assertTrue(c.data.switch_status["switches"][0]["active"])

@@ -54,7 +54,7 @@ Device
 After setup you should see:
 
 - `camera.<name>_camera` — JPEG snapshots and a native MJPEG live view (no ffmpeg)
-- `binary_sensor.<name>_doorbell` — push-driven ring detection
+- `binary_sensor.<name>_doorbell` — event-driven ring detection
 - `binary_sensor.<name>_input_1` — real device input state
 - `binary_sensor.<name>_relay_1_active` — real cached relay state
 - `sensor.<name>_sip_registration` — SIP registration diagnostic
@@ -121,8 +121,8 @@ Recommended pattern: pair `hangup_call` with the call-state sensor's `active_ses
 - Reload the integration after changing camera caps on the device
 
 ### Doorbell binary sensor not flipping
-- Push path uses `/api/log/subscribe`. Failures are retried with exponential backoff; the polling fallback (`call/status`, 5 s) keeps ringing detection alive in the meantime
-- Check the integration log; a `Subscribed to log events` debug line confirms the push channel is up
+- Ring detection is exclusively event-driven via `/api/log/subscribe` — there is no polling fallback for ring events. Subscription failures are retried with exponential backoff; ring events during a gap are lost
+- Check the integration log; a `Log subscription … established` debug line confirms the event channel is up
 
 ### Relay not actuating
 - Verify the relay number matches the physical hardware (1-4)
@@ -139,7 +139,7 @@ Implemented:
 
 - Connection / device config flow + reauth + reconfigure + options flow
 - Native MJPEG live view (no ffmpeg) and RTSP fallback
-- Push-driven ring detection with polling fallback
+- Event-driven state updates (ring, switch, IO, phone, config) with backup polling safety net
 - Diagnostic sensors (SIP registration, call state)
 - Real cached relay/input state
 - `answer_call` / `hangup_call` services
