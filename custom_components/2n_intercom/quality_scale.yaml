@@ -68,7 +68,7 @@ rules:
       All entities exposed by this integration are immediately useful and
       none should be hidden by default.
   entity-translations: done
-  exception-translations: todo
+  exception-translations: done
   icon-translations:
     status: exempt
     comment: |

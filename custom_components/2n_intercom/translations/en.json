@@ -229,6 +229,32 @@
       }
     }
   },
+  "exceptions": {
+    "no_loaded_entries": {
+      "message": "2N Intercom has no loaded config entries."
+    },
+    "entry_not_loaded": {
+      "message": "Config entry {config_entry_id} is not loaded for 2N Intercom."
+    },
+    "ambiguous_entry": {
+      "message": "Multiple 2N Intercom config entries are loaded; include config_entry_id."
+    },
+    "no_active_session": {
+      "message": "No active call session is available to target."
+    },
+    "answer_call_failed": {
+      "message": "Failed to answer call session {session_id}."
+    },
+    "hangup_call_failed": {
+      "message": "Failed to hang up call session {session_id}."
+    },
+    "call_status_query_failed": {
+      "message": "Could not query 2N call status before hangup: {error}"
+    },
+    "hangup_partial_failure": {
+      "message": "Failed to hang up call session(s) {sessions}."
+    }
+  },
   "services": {
     "answer_call": {
       "name": "Answer call",

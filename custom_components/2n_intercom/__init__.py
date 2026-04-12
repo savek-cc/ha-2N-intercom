@@ -87,7 +87,10 @@ def _resolve_service_entry(
     """Return the target config entry for a service call."""
     entries = _get_loaded_entries(hass)
     if not entries:
-        raise HomeAssistantError("2N Intercom has no loaded config entries.")
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="no_loaded_entries",
+        )
 
     config_entry_id = service_data.get("config_entry_id")
     if config_entry_id:
@@ -95,12 +98,15 @@ def _resolve_service_entry(
             if str(entry.entry_id) == str(config_entry_id):
                 return entry
         raise HomeAssistantError(
-            f"Config entry {config_entry_id!r} is not loaded for 2N Intercom."
+            translation_domain=DOMAIN,
+            translation_key="entry_not_loaded",
+            translation_placeholders={"config_entry_id": str(config_entry_id)},
         )
 
     if len(entries) > 1:
         raise HomeAssistantError(
-            "Multiple 2N Intercom config entries are loaded; include config_entry_id."
+            translation_domain=DOMAIN,
+            translation_key="ambiguous_entry",
         )
 
     return entries[0]
@@ -119,7 +125,10 @@ def _resolve_session_id(
     if coordinator_session_id is not None and str(coordinator_session_id).strip():
         return str(coordinator_session_id).strip()
 
-    raise HomeAssistantError("No active call session is available to target.")
+    raise HomeAssistantError(
+        translation_domain=DOMAIN,
+        translation_key="no_active_session",
+    )
 
 
 def _extract_session_ids_from_status(status: Any) -> list[str]:
@@ -153,7 +162,11 @@ def _register_call_services(hass: HomeAssistant) -> None:
         runtime: TwoNIntercomRuntimeData = entry.runtime_data
         session_id = _resolve_session_id(runtime, service_data)
         if not await runtime.api.async_answer_call(session_id):
-            raise HomeAssistantError(f"Failed to answer call session {session_id}.")
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="answer_call_failed",
+                translation_placeholders={"session_id": session_id},
+            )
 
     async def _async_hangup_call(call: Any) -> None:
         """Hang up active 2N call sessions.
@@ -190,8 +203,12 @@ def _register_call_services(hass: HomeAssistant) -> None:
             session_id = str(explicit_session).strip()
             if not await api.async_hangup_call(session_id, reason=reason):
                 raise HomeAssistantError(
-                    f"Failed to hang up call session {session_id}"
-                    + (f" with reason {reason}." if reason else ".")
+                    translation_domain=DOMAIN,
+                    translation_key="hangup_call_failed",
+                    translation_placeholders={
+                        "session_id": session_id,
+                        "reason": reason or "",
+                    },
                 )
             return
 
@@ -205,7 +222,9 @@ def _register_call_services(hass: HomeAssistant) -> None:
             status = await api.async_get_call_status()
         except Exception as err:  # noqa: BLE001 — surface as service error
             raise HomeAssistantError(
-                f"Could not query 2N call status before hangup: {err}"
+                translation_domain=DOMAIN,
+                translation_key="call_status_query_failed",
+                translation_placeholders={"error": str(err)},
             ) from err
 
         _LOGGER.debug(
@@ -250,9 +269,12 @@ def _register_call_services(hass: HomeAssistant) -> None:
 
         if failures:
             raise HomeAssistantError(
-                "Failed to hang up call session(s) "
-                f"{', '.join(failures)}"
-                + (f" with reason {reason}." if reason else ".")
+                translation_domain=DOMAIN,
+                translation_key="hangup_partial_failure",
+                translation_placeholders={
+                    "sessions": ", ".join(failures),
+                    "reason": reason or "",
+                },
             )
 
     hass.services.async_register(DOMAIN, "answer_call", _async_answer_call)

@@ -221,6 +221,32 @@
       }
     }
   },
+  "exceptions": {
+    "no_loaded_entries": {
+      "message": "2N Intercom nemá žádné načtené konfigurační záznamy."
+    },
+    "entry_not_loaded": {
+      "message": "Konfigurační záznam {config_entry_id} není načten pro 2N Intercom."
+    },
+    "ambiguous_entry": {
+      "message": "Je načteno více konfiguračních záznamů 2N Intercom; uveďte config_entry_id."
+    },
+    "no_active_session": {
+      "message": "Není k dispozici žádná aktivní relace hovoru."
+    },
+    "answer_call_failed": {
+      "message": "Nepodařilo se přijmout hovor relace {session_id}."
+    },
+    "hangup_call_failed": {
+      "message": "Nepodařilo se zavěsit hovor relace {session_id}."
+    },
+    "call_status_query_failed": {
+      "message": "Nepodařilo se zjistit stav hovoru 2N před zavěšením: {error}"
+    },
+    "hangup_partial_failure": {
+      "message": "Nepodařilo se zavěsit relaci hovoru {sessions}."
+    }
+  },
   "services": {
     "answer_call": {
       "name": "Přijmout hovor",
