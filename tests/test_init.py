@@ -274,7 +274,7 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
             [
                 (
                     entry.entry_id,
-                    ("camera", "binary_sensor", "lock", "sensor"),
+                    ("camera", "binary_sensor", "switch", "sensor"),
                 )
             ],
         )
@@ -863,28 +863,36 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         entry = FakeConfigEntry(
             "entry-1",
             {"enable_camera": True},
-            options={"enable_camera": False, "enable_doorbell": False, "relays": []},
+            options={"enable_camera": False, "enable_doorbell": False},
         )
         platforms = init_module._get_platforms(entry)
-        # camera disabled, doorbell disabled, no relays → lock + sensor
+        # camera disabled, doorbell disabled → switch + sensor
         self.assertNotIn("camera", platforms)
         self.assertNotIn("binary_sensor", platforms)
-        self.assertIn("lock", platforms)
+        self.assertIn("switch", platforms)
         self.assertIn("sensor", platforms)
 
-    async def test_get_platforms_with_relays(self) -> None:
-        """When relays exist, switch+cover are added instead of lock."""
+    async def test_get_platforms_always_includes_switch(self) -> None:
+        """Switch platform is always included for auto-detection."""
+        init_module = self.init_module
+
+        entry = FakeConfigEntry("entry-1", {}, options={})
+        platforms = init_module._get_platforms(entry)
+        self.assertIn("switch", platforms)
+        self.assertNotIn("cover", platforms)
+
+    async def test_get_platforms_with_gate_relay_adds_cover(self) -> None:
+        """Cover platform is added when a relay is configured as gate."""
         init_module = self.init_module
 
         entry = FakeConfigEntry(
             "entry-1",
             {},
-            options={"relays": [{"relay_number": 1}]},
+            options={"relays": [{"relay_number": 1, "relay_device_type": "gate"}]},
         )
         platforms = init_module._get_platforms(entry)
         self.assertIn("switch", platforms)
         self.assertIn("cover", platforms)
-        self.assertNotIn("lock", platforms)
 
     async def test_is_entry_loaded_with_config_entry_state(self) -> None:
         """_is_entry_loaded with a state attribute that has LOADED."""

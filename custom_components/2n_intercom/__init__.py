@@ -23,6 +23,7 @@ from .const import (
     CONF_ENABLE_CAMERA,
     CONF_ENABLE_DOORBELL,
     CONF_PROTOCOL,
+    CONF_RELAY_DEVICE_TYPE,
     CONF_RELAYS,
     CONF_RTSP_PASSWORD,
     CONF_RTSP_USERNAME,
@@ -33,6 +34,7 @@ from .const import (
     DEFAULT_PROTOCOL,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_VERIFY_SSL,
+    DEVICE_TYPE_GATE,
     DOMAIN,
     SCAN_INTERVAL_MAX,
     SCAN_INTERVAL_MIN,
@@ -63,11 +65,18 @@ def _get_platforms(entry: ConfigEntry) -> list[str]:
     if _get_option(entry, CONF_ENABLE_DOORBELL, DEFAULT_ENABLE_DOORBELL):
         platforms.append("binary_sensor")
 
+    # Switch platform is always loaded — it auto-detects enabled relays
+    # from the device's switch/caps endpoint. Cover is only added when
+    # the user has explicitly configured a relay as gate-type.
+    platforms.append("switch")
+
     relays = _get_option(entry, CONF_RELAYS, [])
-    if relays:
-        platforms.extend(["switch", "cover"])
-    else:
-        platforms.append("lock")
+    if any(
+        r.get(CONF_RELAY_DEVICE_TYPE) == DEVICE_TYPE_GATE
+        for r in (relays or [])
+        if isinstance(r, dict)
+    ):
+        platforms.append("cover")
 
     platforms.append("sensor")
 

@@ -637,16 +637,13 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
                 "async_get_phone_status",
                 "phone status",
             )
-            # switch_caps / io_caps are static — fetched once at setup. Lazy fallback
-            # for callers (e.g. tests) that exercise _async_update_data directly.
-            if self._switch_caps is None:
-                await self._refresh_secondary_cache(
-                    "_switch_caps",
-                    "async_get_switch_caps",
-                    "switch caps",
-                    log_level="warning",
-                )
-            switch_caps = self._switch_caps or {}
+            # switch_caps is refreshed every cycle so the switch platform
+            # can detect newly enabled / disabled relays without a restart.
+            switch_caps = await self._refresh_secondary_cache(
+                "_switch_caps",
+                "async_get_switch_caps",
+                "switch caps",
+            )
             switch_status = await self._refresh_secondary_cache(
                 "_switch_status",
                 "async_get_switch_status",
@@ -817,6 +814,16 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
     def switch_caps(self) -> dict[str, Any]:
         """Return cached switch capabilities."""
         return self._switch_caps or {}
+
+    @property
+    def enabled_switch_numbers(self) -> set[int]:
+        """Return the set of relay numbers that are currently enabled."""
+        switches = (self._switch_caps or {}).get("switches") or []
+        return {
+            s["switch"]
+            for s in switches
+            if isinstance(s, dict) and s.get("enabled") and isinstance(s.get("switch"), int)
+        }
 
     @property
     def switch_status(self) -> dict[str, Any]:
