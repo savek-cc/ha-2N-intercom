@@ -4,7 +4,7 @@
 
 This integration drives a 2N IP Intercom from Home Assistant. It started as a basic lock entity, was redesigned around `DataUpdateCoordinator`, and was hardened against the 2N HTTP API 2.50 LTS for the **2N IP Verso** (firmware `2.50.0.76.2`) — a single-family-house deployment with no RTSP licence.
 
-The remediation pass that produced the current shape added MJPEG-first live view, event-driven state handling, real-state status entities, answer/hangup services, reauth + reconfigure flows, and HA 2026.4+ compliance. The current version (`1.3.0`) extends event subscriptions to all state types (switch, IO, phone, config) and makes polling a low-frequency safety net.
+The remediation pass that produced the current shape added MJPEG-first live view, event-driven state handling, real-state status entities, answer/hangup services, reauth + reconfigure flows, and HA 2026.4+ compliance. The current version (`1.3.1`) extends event subscriptions to all state types (switch, IO, phone, config) and makes polling a low-frequency safety net.
 
 ## What is implemented
 
@@ -19,7 +19,7 @@ The remediation pass that produced the current shape added MJPEG-first live view
 
 `config_flow.py` provides:
 
-- **User flow** — multi-step (connection → device → relays)
+- **User flow** — two-step setup (connection → device), with relay overrides configured later in the options flow
 - **Reauth flow** — auto-triggered when the device starts rejecting credentials (raises `ConfigEntryAuthFailed`, surfaces a notification, walks the user through re-entering the password)
 - **Reconfigure flow** — HA 2024.10+ flow for changing host/port/protocol/credentials/SSL without removing the entry
 - **Options flow** — change device features and per-relay settings post-setup
@@ -167,7 +167,7 @@ If credentials later become invalid, HA automatically opens the **reauth** flow.
 - Imported `homeassistant.components.persistent_notification` API
 - OptionsFlow does not store `config_entry` (uses `self.config_entry` from the framework)
 - `DataUpdateCoordinator` constructed with the `config_entry` kwarg
-- `manifest.json`: `requirements: []`, `iot_class: local_push`, `integration_type: device`, `version: 1.3.0`
+- `manifest.json`: `requirements: []`, `iot_class: local_push`, `integration_type: device`, `version: 1.3.1`
 - `hacs.json`: `homeassistant: 2026.4.0`
 
 ## What's intentionally **not** implemented
@@ -181,7 +181,7 @@ These belong outside the fork or to a separate licence:
 
 ## Breaking changes
 
-### From 1.0.x → 1.3.0
+### From 1.0.x → 1.3.1
 
 - Camera entity is now backed by `MjpegCamera` — credentials are no longer embedded in stream URLs. Anything reading the previous credential-leaking URL out of HA logs/diagnostics needs to be updated; the camera entity itself works the same in dashboards and HomeKit
 - Auth failures now raise `ConfigEntryAuthFailed` instead of looping on `ConfigEntryNotReady` + persistent notification — you'll see a reauth notification instead
@@ -199,7 +199,7 @@ python3 -m py_compile custom_components/2n_intercom/*.py
 
 End-to-end live verification is done with the standalone scripts under the upstream working tree (e.g. `verify_2n_hangup_live.py`, `verify_door_open_hangup.py`) — they hit a real device, drive a doorbell ring via `/api/sim/keypress`, and validate the full ring → answer → hangup loop against HA.
 
-## Statistics (as of 1.3.0)
+## Statistics (as of 1.3.1)
 
 - **Platforms:** 5 (camera, binary_sensor, sensor, switch, cover)
 - **APIs:** 11 endpoint families (auth scheme determined by device per service group)
@@ -215,5 +215,5 @@ The integration is feature-complete for the single-family-house IP Verso baselin
 ---
 
 *Status:* Production-ready against 2N IP Verso firmware `2.50.0.76.2`
-*Version:* 1.3.0
+*Version:* 1.3.1
 *Repository:* [savek-cc/ha-2N-intercom](https://github.com/savek-cc/ha-2N-intercom) (fork of [mastalir1980/ha-2N-intercom](https://github.com/mastalir1980/ha-2N-intercom))

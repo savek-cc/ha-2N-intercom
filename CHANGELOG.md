@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.1 - 2026-04-12
+
+### Documentation sync and quality scale
+- Updated README.md, INSTALLATION.md, IMPLEMENTATION_SUMMARY.md, and validate.py to reflect the event-driven subscription model (ring detection is exclusively event-driven with no polling fallback, backup polling is a low-frequency safety net at 60 s default)
+- `quality_scale.yaml`: strict-typing marked `done` (mypy strict clean, pyright clean with framework-level suppressions via `pyrightconfig.json`)
+- Added `pyrightconfig.json` to suppress HA-framework-level pyright false positives (`cached_property` override, stub fallback typing) that affect all HA integrations equally
+- Stripped vestigial polling ring-detection code from `_async_update_data` — baseline state capture retained for event handlers
+- Adopted HA `_attr_*` pattern for all static entity properties, fixing pyright `reportIncompatibleVariableOverride` errors
+
 ## 1.3.0 - 2026-04-12
 
 ### Motion detection binary sensor
