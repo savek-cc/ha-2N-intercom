@@ -76,6 +76,20 @@ def _install_homeassistant_stubs() -> None:
     sys.modules["homeassistant.helpers.update_coordinator"] = update_coordinator
     ensure_package("homeassistant.helpers")
 
+    aiohttp_client = types.ModuleType("homeassistant.helpers.aiohttp_client")
+
+    def async_create_clientsession(hass, **kwargs):
+        # Return a fake session from the aiohttp stubs already installed
+        aiohttp_mod = sys.modules["aiohttp"]
+        return aiohttp_mod.ClientSession()
+
+    aiohttp_client.async_create_clientsession = async_create_clientsession
+    sys.modules["homeassistant.helpers.aiohttp_client"] = aiohttp_client
+
+    helpers_typing = types.ModuleType("homeassistant.helpers.typing")
+    helpers_typing.ConfigType = dict
+    sys.modules["homeassistant.helpers.typing"] = helpers_typing
+
 
 def load_init_module():
     install_api_stubs()
@@ -241,6 +255,7 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         )
         hass = FakeHass([entry])
 
+        await init_module.async_setup(hass, {})
         result = await init_module.async_setup_entry(hass, entry)
 
         self.assertTrue(result)
@@ -283,6 +298,7 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         )
         hass = FakeHass([entry])
 
+        await init_module.async_setup(hass, {})
         await init_module.async_setup_entry(hass, entry)
         entry.runtime_data.api = FakeAPI(
             answer_result=False,
@@ -325,6 +341,7 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         )
         hass = FakeHass([entry])
 
+        await init_module.async_setup(hass, {})
         await init_module.async_setup_entry(hass, entry)
 
         hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
@@ -350,6 +367,7 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         )
         hass = FakeHass([entry])
 
+        await init_module.async_setup(hass, {})
         await init_module.async_setup_entry(hass, entry)
 
         hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
@@ -384,6 +402,7 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         )
         hass = FakeHass([entry_1, entry_2])
 
+        await init_module.async_setup(hass, {})
         await init_module.async_setup_entry(hass, entry_1)
         entry_2.runtime_data = init_module.TwoNIntercomRuntimeData(
             coordinator=types.SimpleNamespace(active_session_id="session-999"),
@@ -423,6 +442,7 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         )
         hass = FakeHass([entry_1, entry_2])
 
+        await init_module.async_setup(hass, {})
         await init_module.async_setup_entry(hass, entry_1)
         await init_module.async_setup_entry(hass, entry_2)
 

@@ -14,6 +14,8 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers.typing import ConfigType
 
 from .api import TwoNIntercomAPI
 from .const import (
@@ -257,18 +259,41 @@ def _register_call_services(hass: HomeAssistant) -> None:
     hass.services.async_register(DOMAIN, "hangup_call", _async_hangup_call)
 
 
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Set up 2N Intercom services (action-setup rule)."""
+    _register_call_services(hass)
+    return True
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: TwoNIntercomConfigEntry
 ) -> bool:
     """Set up 2N Intercom from a config entry."""
     data = _get_entry_data(entry)
+    verify_ssl = data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
+
+    import aiohttp as _aiohttp  # local import — only needed here for the middleware
+
+    session = async_create_clientsession(
+        hass,
+        verify_ssl=verify_ssl,
+        middlewares=(
+            _aiohttp.DigestAuthMiddleware(
+                data[CONF_USERNAME],
+                data[CONF_PASSWORD],
+                preemptive=False,
+            ),
+        ),
+    )
+
     api = TwoNIntercomAPI(
         host=data[CONF_HOST],
         port=data[CONF_PORT],
         username=data[CONF_USERNAME],
         password=data[CONF_PASSWORD],
         protocol=data.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
-        verify_ssl=data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+        verify_ssl=verify_ssl,
+        session=session,
     )
 
     # Honour the per-entry polling interval from the options flow when set,
@@ -298,7 +323,6 @@ async def async_setup_entry(
 
     entry.runtime_data = TwoNIntercomRuntimeData(coordinator=coordinator, api=api)
 
-    _register_call_services(hass)
     await coordinator.async_start_log_listener()
 
     # Stop the long-poll log listener early in HA shutdown so the in-flight

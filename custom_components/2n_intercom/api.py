@@ -375,6 +375,7 @@ class TwoNIntercomAPI:
         port: int = 443,
         protocol: str = "https",
         verify_ssl: bool = False,
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
         """Initialize the API client."""
         self.host = host
@@ -383,7 +384,8 @@ class TwoNIntercomAPI:
         self.password = password
         self.protocol = protocol
         self.verify_ssl = verify_ssl
-        self._session: aiohttp.ClientSession | None = None
+        self._session: aiohttp.ClientSession | None = session
+        self._owns_session: bool = session is None
         self._base_url = f"{protocol}://{host}:{port}"
         self._camera_capabilities = CameraCapabilities()
         self._camera_transport_info = CameraTransportInfo(
@@ -394,7 +396,13 @@ class TwoNIntercomAPI:
         self._camera_transport_resolved = False
 
     async def async_get_session(self) -> aiohttp.ClientSession:
-        """Get or create aiohttp session."""
+        """Get or create aiohttp session.
+
+        When a session was injected via ``__init__`` (the HA-managed path),
+        it is returned as-is.  A fallback self-managed session is created
+        only when no session was injected (e.g. during config-flow
+        validation where no HA session helper is available).
+        """
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
                 connector=aiohttp.TCPConnector(ssl=self.verify_ssl),
@@ -406,6 +414,7 @@ class TwoNIntercomAPI:
                     ),
                 ),
             )
+            self._owns_session = True
         return self._session
 
     def _get_basic_auth(self) -> aiohttp.BasicAuth:
@@ -582,7 +591,14 @@ class TwoNIntercomAPI:
                 yield response
 
     async def async_close(self) -> None:
-        """Close the API session."""
+        """Close the API session if we own it.
+
+        HA-managed sessions (injected via ``__init__``) are cleaned up by
+        the ``async_create_clientsession`` lifecycle helper, so we must
+        not close them ourselves.
+        """
+        if not self._owns_session:
+            return
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None

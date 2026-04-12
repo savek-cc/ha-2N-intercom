@@ -1,6 +1,6 @@
 rules:
   # Bronze
-  action-setup: todo
+  action-setup: done
   appropriate-polling: done
   brands:
     status: exempt
@@ -88,5 +88,5 @@ rules:
 
   # Platinum
   async-dependency: done
-  inject-websession: todo
-  strict-typing: todo
+  inject-websession: done
+  strict-typing: done
