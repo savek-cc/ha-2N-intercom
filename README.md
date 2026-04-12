@@ -2,14 +2,14 @@
 
 Home Assistant custom integration for 2N IP Intercom systems with camera, doorbell, relay, call control, and HomeKit support.
 
-Verified against a 2N IP Verso running firmware **2.50.0.76.2** (no RTSP server license).
+Verified against two 2N IP Verso devices running firmware **2.50.0.76.2** — one without RTSP license (MJPEG only) and one with RTSP license and separate RTSP credentials.
 
 ## Features
 
 ### Camera
 - **JPEG snapshot** via `/api/camera/snapshot`
 - **Native MJPEG live view** via `/api/camera/snapshot?...&fps=<n>` — served through Home Assistant's `MjpegCamera`, no ffmpeg/HLS round-trip
-- **RTSP stream source** when the device exposes it (the integration probes once at setup and prefers MJPEG when RTSP is unlicensed/unavailable)
+- **RTSP stream source** when the device exposes it — requires separate RTSP credentials configured in the options flow (the 2N RTSP server has its own user database independent of the HTTP API accounts)
 - **Credentials are passed to `MjpegCamera` separately** — they never appear in the URL exposed to logs, diagnostics, or dashboards
 - HomeKit-compatible video doorbell
 
@@ -67,6 +67,16 @@ The integration handles every combination transparently:
 
 The same username and password must work for every service group the integration touches. **Don't try to "simplify" `_async_request`** by hard-coding one scheme — the dual-auth path exists exactly because the device exposes the choice per service group.
 
+#### RTSP authentication
+
+The 2N RTSP server has its **own user database**, completely independent of the HTTP API accounts. RTSP credentials are configured on the device under **Services → Streaming → RTSP Server → User Database**. There is no fallback from HTTP API credentials to RTSP credentials — they are separate systems.
+
+The integration provides optional **RTSP Username** and **RTSP Password** fields in the camera options step. When configured:
+
+- The RTSP probe performs a full Digest authentication handshake (unauthenticated OPTIONS → 401 challenge → authenticated OPTIONS) to validate that the credentials actually work before marking RTSP as available.
+- RTSP URLs embed the credentials for the HA stream worker (`rtsp://user:pass@host:554/h264_stream`). Special characters in credentials are URL-encoded.
+- Without RTSP credentials, the integration will not attempt RTSP even if the device has a valid RTSP license — it falls back to MJPEG.
+
 ## Architecture
 
 - **DataUpdateCoordinator** centralises polling, caching, and the background log listener
@@ -98,6 +108,14 @@ The same username and password must work for every service group the integration
 2. Restart Home Assistant
 3. Settings → Devices & Services → **+ Add Integration** → 2N Intercom
 
+### Removing the integration
+
+1. Settings → Devices & Services → 2N Intercom
+2. Click the three-dot menu (⋮) on the integration card → **Delete**
+3. Confirm the removal
+
+All entities, devices, and automation references created by this integration are removed immediately. No restart is required. If you installed via HACS, you can also uninstall the repository entry from HACS → Integrations afterwards to stop receiving update notifications.
+
 ### Reconfiguring or re-authenticating
 
 - **Reconfigure**: Settings → Devices & Services → 2N Intercom → ⋮ → **Reconfigure**. Lets you change host/port/protocol/credentials without removing the entry.
@@ -117,6 +135,47 @@ The same username and password must work for every service group the integration
 3. **Relays** (one step per relay)
    - Name, physical relay number (1-4), device type (door / gate), pulse duration (ms)
    - Door default: 2000 ms — Gate default: 15000 ms
+
+### Initial setup parameters
+
+| Step | Parameter | Type | Default | Description |
+|---|---|---|---|---|
+| Connection | `host` | string | *(required)* | IP address or hostname of the intercom |
+| Connection | `port` | int | 443 (HTTPS) / 80 (HTTP) | HTTP API port |
+| Connection | `protocol` | `http` \| `https` | `https` | Transport protocol |
+| Connection | `username` | string | *(required)* | Device API username |
+| Connection | `password` | string | *(required)* | Device API password |
+| Connection | `verify_ssl` | bool | `false` | Validate the HTTPS certificate (enable only if trusted by HA) |
+| Device | `name` | string | `2N Intercom` | Display name in Home Assistant |
+| Device | `enable_camera` | bool | `true` | Create the camera entity |
+| Device | `enable_doorbell` | bool | `true` | Create the doorbell binary sensor |
+| Device | `relay_count` | 0-4 | 1 | Number of relays to configure |
+| Device | `called_id` | string | `All calls` | Ringing account / peer filter |
+| Relay | `relay_name` | string | `Relay N` | Display name for this relay |
+| Relay | `relay_number` | 1-4 | *(sequential)* | Physical relay number on the device |
+| Relay | `relay_device_type` | `door` \| `gate` | `door` | Door → switch entity, Gate → cover entity |
+| Relay | `relay_pulse_duration` | int (ms) | 2000 (door) / 15000 (gate) | How long the relay stays triggered |
+
+### Options flow parameters
+
+After initial setup, open the integration's **Options** (Settings → Devices & Services → 2N Intercom → **Configure**) to change behavioral settings without removing the entry. Connection settings are changed through the **Reconfigure** flow instead.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `name` | string | *(from setup)* | Display name |
+| `enable_camera` | bool | `true` | Toggle camera entity |
+| `enable_doorbell` | bool | `true` | Toggle doorbell entity |
+| `scan_interval` | 2-300 (s) | 5 | Polling interval. Lower = faster ring detection, higher device load |
+| `relay_count` | 0-4 | *(from setup)* | Number of relays |
+| `door_type` | `door` \| `gate` | *(derived)* | Legacy lock device type |
+| `called_id` | string | `All calls` | Ringing account / peer filter |
+| `live_view_mode` | `auto` \| `rtsp` \| `mjpeg` \| `jpeg_only` | `auto` | Camera live view transport. `auto` picks RTSP if licensed and RTSP credentials are set, then MJPEG, then snapshots |
+| `rtsp_username` | string | *(empty)* | RTSP server username (from the 2N RTSP user database, **not** the HTTP API account) |
+| `rtsp_password` | string | *(empty)* | RTSP server password |
+| `camera_source` | `internal` \| `external` | `internal` | Which camera sensor to stream (external = secondary module) |
+| `mjpeg_width` | 160-2592 (px) | 1280 | MJPEG stream width |
+| `mjpeg_height` | 160-2592 (px) | 960 | MJPEG stream height |
+| `mjpeg_fps` | 1-15 | 10 | MJPEG frame rate. Lower values reduce bandwidth |
 
 ### Example: single-family house (door + gate)
 
@@ -192,7 +251,13 @@ The integration negotiates Basic vs Digest per request — see the **Authenticat
 ### Camera entity has no live view
 - Confirm `camera/caps` returns `mjpeg.fps_min`/`fps_max` (the integration's transport probe runs once at setup; reload the entry after changing camera caps on the device)
 - Open the entity attributes — `live_view_selected_mode` should be `mjpeg`, `mjpeg_available` should be `true`
-- For RTSP, make sure the RTSP server licence is enabled on the device
+
+### RTSP stream not working
+- Make sure the RTSP server licence is enabled on the device
+- Configure RTSP credentials in the integration's options flow (Settings → Devices & Services → 2N Intercom → Configure → Camera step). The RTSP server has its own user database — HTTP API credentials do **not** work for RTSP
+- Create an RTSP user on the device: **Services → Streaming → RTSP Server → User Database**
+- The entity attributes should show `rtsp_available: true` and `live_view_selected_mode: rtsp` when RTSP is working
+- If RTSP credentials are wrong, the integration logs a warning and falls back to MJPEG
 
 ### Doorbell not triggering
 - Open the integration's diagnostics; the log subscription id should be set
@@ -231,7 +296,7 @@ custom_components/2n_intercom/
 ### Tests
 
 ```bash
-python3 -m unittest discover -s tests -t tests   # 75/75
+python3 -m unittest discover -s tests -t tests   # 411/411
 python3 validate.py                               # manifest + HACS compliance
 python3 -m py_compile custom_components/2n_intercom/*.py
 ```
