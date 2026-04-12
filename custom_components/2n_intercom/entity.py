@@ -8,12 +8,14 @@ already pulls in everything we need (see ``camera.py``).
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import TwoNIntercomCoordinator
+
+if TYPE_CHECKING:
+    from .coordinator import TwoNIntercomConfigEntry
 
 
 class TwoNIntercomEntity(CoordinatorEntity[TwoNIntercomCoordinator]):  # type: ignore[misc]
@@ -24,7 +26,7 @@ class TwoNIntercomEntity(CoordinatorEntity[TwoNIntercomCoordinator]):  # type: i
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: TwoNIntercomConfigEntry,
     ) -> None:
         """Initialise the entity with its config entry."""
         super().__init__(coordinator)

@@ -15,6 +15,8 @@ import asyncio
 import logging
 from typing import Any
 
+from typing import TYPE_CHECKING
+
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -35,6 +37,9 @@ from .const import (
 from .coordinator import TwoNIntercomCoordinator, TwoNIntercomRuntimeData
 from .entity import TwoNIntercomEntity
 
+if TYPE_CHECKING:
+    from .coordinator import TwoNIntercomConfigEntry
+
 # Switch actions hit the device (relay trigger) so we serialise them per
 # platform; reads come from the coordinator and don't count toward this limit.
 PARALLEL_UPDATES = 1
@@ -43,7 +48,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _get_user_relay_overrides(
-    config_entry: ConfigEntry,
+    config_entry: TwoNIntercomConfigEntry,
 ) -> dict[int, dict[str, Any]]:
     """Return a ``{relay_number: relay_config}`` map from user options."""
     relays = config_entry.options.get(
@@ -91,7 +96,7 @@ def _switch_unique_id(entry_id: str, relay_number: int) -> str:
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: TwoNIntercomConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up 2N Intercom switch platform with dynamic discovery."""
@@ -180,7 +185,7 @@ class TwoNIntercomSwitch(TwoNIntercomEntity, SwitchEntity):  # type: ignore[misc
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: TwoNIntercomConfigEntry,
         *,
         relay_number: int,
         relay_name: str,

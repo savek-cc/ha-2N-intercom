@@ -5,12 +5,13 @@ import asyncio
 import logging
 from typing import Any
 
+from typing import TYPE_CHECKING
+
 from homeassistant.components.cover import (
     CoverDeviceClass,
     CoverEntity,
     CoverEntityFeature,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -26,6 +27,9 @@ from .const import (
 from .coordinator import TwoNIntercomCoordinator, TwoNIntercomRuntimeData
 from .entity import TwoNIntercomEntity
 
+if TYPE_CHECKING:
+    from .coordinator import TwoNIntercomConfigEntry
+
 # Cover actions hit the device (relay trigger) so we serialise them per
 # platform; reads come from the coordinator and don't count toward this limit.
 PARALLEL_UPDATES = 1
@@ -35,7 +39,7 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: TwoNIntercomConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up 2N Intercom cover platform."""
@@ -67,7 +71,7 @@ class TwoNIntercomCover(TwoNIntercomEntity, CoverEntity):  # type: ignore[misc]
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: TwoNIntercomConfigEntry,
         relay_config: dict[str, Any],
     ) -> None:
         """Initialize the cover."""

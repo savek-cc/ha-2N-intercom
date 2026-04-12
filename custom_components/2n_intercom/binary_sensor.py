@@ -4,11 +4,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from typing import TYPE_CHECKING
+
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 try:
     from homeassistant.const import EntityCategory
@@ -18,6 +19,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import TwoNIntercomCoordinator, TwoNIntercomRuntimeData
 from .entity import TwoNIntercomEntity
+
+if TYPE_CHECKING:
+    from .coordinator import TwoNIntercomConfigEntry
 
 # Entities are pure consumers of the coordinator's cached data and never hit
 # the device on async_update, so unlimited concurrency is the right answer per
@@ -59,7 +63,7 @@ def _switch_exists(payload: dict[str, Any], switch_number: int) -> bool:
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: TwoNIntercomConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up 2N Intercom binary sensor platform."""
@@ -100,7 +104,7 @@ class TwoNIntercomDoorbell(TwoNIntercomEntity, BinarySensorEntity):  # type: ign
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: TwoNIntercomConfigEntry,
     ) -> None:
         """Initialize the doorbell."""
         super().__init__(coordinator, config_entry)
@@ -152,7 +156,7 @@ class TwoNIntercomInput1Sensor(TwoNIntercomEntity, BinarySensorEntity):  # type:
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: TwoNIntercomConfigEntry,
     ) -> None:
         """Initialize the input sensor."""
         super().__init__(coordinator, config_entry)
@@ -184,7 +188,7 @@ class TwoNIntercomRelay1ActiveSensor(TwoNIntercomEntity, BinarySensorEntity):  #
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: TwoNIntercomConfigEntry,
     ) -> None:
         """Initialize the relay sensor."""
         super().__init__(coordinator, config_entry)
@@ -219,7 +223,7 @@ class TwoNIntercomMotionSensor(TwoNIntercomEntity, BinarySensorEntity):  # type:
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: TwoNIntercomConfigEntry,
     ) -> None:
         """Initialize the motion sensor."""
         super().__init__(coordinator, config_entry)

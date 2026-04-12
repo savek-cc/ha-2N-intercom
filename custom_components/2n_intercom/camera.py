@@ -4,9 +4,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from typing import TYPE_CHECKING
+
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.components.mjpeg import MjpegCamera
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -17,6 +18,9 @@ from .const import (
     LIVE_VIEW_MODE_RTSP,
 )
 from .coordinator import TwoNIntercomCoordinator, TwoNIntercomRuntimeData
+
+if TYPE_CHECKING:
+    from .coordinator import TwoNIntercomConfigEntry
 
 # Snapshots are served from the coordinator's cache and the live MJPEG stream
 # is proxied by the core MjpegCamera helper, so the camera platform never hits
@@ -81,7 +85,7 @@ def get_supported_features_for_transport(
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: TwoNIntercomConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up 2N Intercom camera platform."""
@@ -112,7 +116,7 @@ class TwoNIntercomCamera(
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: TwoNIntercomConfigEntry,
     ) -> None:
         """Initialize the camera."""
         api = coordinator.api

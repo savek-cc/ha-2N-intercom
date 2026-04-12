@@ -48,14 +48,14 @@ _LOGGER = logging.getLogger(__name__)
 _VALID_HANGUP_REASONS = {"normal", "rejected", "busy"}
 
 
-def _get_option(entry: ConfigEntry, key: str, default: object = None) -> object:
+def _get_option(entry: TwoNIntercomConfigEntry | ConfigEntry, key: str, default: object = None) -> object:
     """Return a behavioral option, preferring entry.options over entry.data."""
     if key in entry.options:
         return entry.options[key]
     return entry.data.get(key, default)
 
 
-def _get_platforms(entry: ConfigEntry) -> list[str]:
+def _get_platforms(entry: TwoNIntercomConfigEntry | ConfigEntry) -> list[str]:
     """Get list of platforms to set up based on configuration."""
     platforms: list[str] = []
 

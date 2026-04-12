@@ -1,10 +1,9 @@
 """Sensor platform for 2N Intercom diagnostic status."""
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 try:
     from homeassistant.const import EntityCategory
@@ -15,6 +14,9 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .coordinator import TwoNIntercomCoordinator, TwoNIntercomRuntimeData
 from .entity import TwoNIntercomEntity
 
+if TYPE_CHECKING:
+    from .coordinator import TwoNIntercomConfigEntry
+
 # Sensors are pure consumers of the coordinator's cached payloads and never
 # hit the device on async_update, so unlimited concurrency is correct per the
 # HA quality-scale `parallel-updates` rule.
@@ -23,7 +25,7 @@ PARALLEL_UPDATES = 0
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: TwoNIntercomConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up 2N Intercom sensor platform."""
@@ -58,7 +60,7 @@ class _TwoNIntercomDiagnosticSensor(TwoNIntercomEntity, SensorEntity):  # type: 
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: TwoNIntercomConfigEntry,
         unique_id_suffix: str,
     ) -> None:
         super().__init__(coordinator, config_entry)
@@ -73,7 +75,7 @@ class TwoNIntercomSipRegistrationStatusSensor(_TwoNIntercomDiagnosticSensor):
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: TwoNIntercomConfigEntry,
     ) -> None:
         super().__init__(coordinator, config_entry, "sip_registration")
 
@@ -138,7 +140,7 @@ class TwoNIntercomCallStateSensor(TwoNIntercomEntity, SensorEntity):  # type: ig
     def __init__(
         self,
         coordinator: TwoNIntercomCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: TwoNIntercomConfigEntry,
     ) -> None:
         super().__init__(coordinator, config_entry)
         self._attr_unique_id = f"{config_entry.entry_id}_call_state"
