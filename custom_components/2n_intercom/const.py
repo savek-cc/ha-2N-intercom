@@ -3,6 +3,7 @@
 DOMAIN = "2n_intercom"
 
 # Configuration keys
+CONF_SERIAL_NUMBER = "serial_number"
 CONF_PROTOCOL = "protocol"
 CONF_VERIFY_SSL = "verify_ssl"
 CONF_ENABLE_CAMERA = "enable_camera"
@@ -22,6 +23,8 @@ CONF_MJPEG_WIDTH = "mjpeg_width"
 CONF_MJPEG_HEIGHT = "mjpeg_height"
 CONF_MJPEG_FPS = "mjpeg_fps"
 CONF_CAMERA_SOURCE = "camera_source"
+CONF_RTSP_USERNAME = "rtsp_username"
+CONF_RTSP_PASSWORD = "rtsp_password"
 
 # Relay configuration keys
 CONF_RELAY_NAME = "relay_name"

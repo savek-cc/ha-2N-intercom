@@ -53,7 +53,7 @@ async def async_setup_entry(
     )
 
 
-class TwoNIntercomLock(TwoNIntercomEntity, LockEntity):
+class TwoNIntercomLock(TwoNIntercomEntity, LockEntity):  # type: ignore[misc]
     """Representation of a 2N Intercom lock."""
 
     _attr_name = None
@@ -126,8 +126,8 @@ class TwoNIntercomLock(TwoNIntercomEntity, LockEntity):
         # rather than flapping. If caps say there is no relay 1, fall back
         # to the optimistic flag (legacy behavior for stub-only setups).
         if self._relay_one_present():
-            return self._attr_is_locked
-        return self._attr_is_locked
+            return bool(self._attr_is_locked)
+        return bool(self._attr_is_locked)
 
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the lock."""

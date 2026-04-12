@@ -38,7 +38,9 @@ async def async_setup_entry(
     runtime: TwoNIntercomRuntimeData = config_entry.runtime_data
     coordinator: TwoNIntercomCoordinator = runtime.coordinator
 
-    relays = {**config_entry.data, **config_entry.options}.get(CONF_RELAYS, [])
+    relays = config_entry.options.get(
+        CONF_RELAYS, config_entry.data.get(CONF_RELAYS, [])
+    )
     
     # Create switch entities for door-type relays
     switches = []
@@ -52,7 +54,7 @@ async def async_setup_entry(
         async_add_entities(switches, True)
 
 
-class TwoNIntercomSwitch(TwoNIntercomEntity, SwitchEntity):
+class TwoNIntercomSwitch(TwoNIntercomEntity, SwitchEntity):  # type: ignore[misc]
     """Representation of a 2N Intercom switch (for doors)."""
 
     def __init__(
@@ -74,12 +76,12 @@ class TwoNIntercomSwitch(TwoNIntercomEntity, SwitchEntity):
         self._attr_name = self._relay_name
         self._attr_unique_id = f"{config_entry.entry_id}_switch_{self._relay_number}"
         self._attr_is_on = False
-        self._turning_off_task: asyncio.Task | None = None
+        self._turning_off_task: asyncio.Task[None] | None = None
 
     @property
     def is_on(self) -> bool:
         """Return true if switch is on."""
-        return self._attr_is_on
+        return bool(self._attr_is_on)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on (trigger relay)."""

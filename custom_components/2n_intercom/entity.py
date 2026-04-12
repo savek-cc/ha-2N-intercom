@@ -16,7 +16,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .coordinator import TwoNIntercomCoordinator
 
 
-class TwoNIntercomEntity(CoordinatorEntity[TwoNIntercomCoordinator]):
+class TwoNIntercomEntity(CoordinatorEntity[TwoNIntercomCoordinator]):  # type: ignore[misc]
     """Base entity that wires the config entry and shared device info."""
 
     _attr_has_entity_name = True
@@ -33,19 +33,22 @@ class TwoNIntercomEntity(CoordinatorEntity[TwoNIntercomCoordinator]):
     @property
     def _entry_display_name(self) -> str:
         """Return the user-facing device name from the config entry."""
-        return self._config_entry.options.get(
+        name: str = self._config_entry.options.get(
             "name",
             self._config_entry.data.get("name", "2N Intercom"),
         )
+        return name
 
     @property
     def device_info(self) -> dict[str, Any]:
         """Return device information for the integration device."""
-        return self.coordinator.get_device_info(
+        result: dict[str, Any] = self.coordinator.get_device_info(
             self._config_entry.entry_id, self._entry_display_name
         )
+        return result
 
     @property
     def available(self) -> bool:
         """Return whether the entity is available."""
-        return self.coordinator.last_update_success
+        available: bool = self.coordinator.last_update_success
+        return available

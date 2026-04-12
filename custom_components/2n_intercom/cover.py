@@ -42,7 +42,9 @@ async def async_setup_entry(
     runtime: TwoNIntercomRuntimeData = config_entry.runtime_data
     coordinator: TwoNIntercomCoordinator = runtime.coordinator
 
-    relays = {**config_entry.data, **config_entry.options}.get(CONF_RELAYS, [])
+    relays = config_entry.options.get(
+        CONF_RELAYS, config_entry.data.get(CONF_RELAYS, [])
+    )
     
     # Create cover entities for gate-type relays
     covers = []
@@ -56,7 +58,7 @@ async def async_setup_entry(
         async_add_entities(covers, True)
 
 
-class TwoNIntercomCover(TwoNIntercomEntity, CoverEntity):
+class TwoNIntercomCover(TwoNIntercomEntity, CoverEntity):  # type: ignore[misc]
     """Representation of a 2N Intercom cover (for gates)."""
 
     _attr_device_class = CoverDeviceClass.GATE
@@ -83,12 +85,12 @@ class TwoNIntercomCover(TwoNIntercomEntity, CoverEntity):
         self._attr_is_closed = True
         self._is_opening = False
         self._is_closing = False
-        self._state_task: asyncio.Task | None = None
+        self._state_task: asyncio.Task[None] | None = None
 
     @property
     def is_closed(self) -> bool:
         """Return if the cover is closed."""
-        return self._attr_is_closed
+        return bool(self._attr_is_closed)
 
     @property
     def is_opening(self) -> bool:

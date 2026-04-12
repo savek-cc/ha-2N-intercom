@@ -13,7 +13,7 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_STOP,
 )
 from homeassistant.core import Event, HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.typing import ConfigType
 
@@ -24,6 +24,8 @@ from .const import (
     CONF_ENABLE_DOORBELL,
     CONF_PROTOCOL,
     CONF_RELAYS,
+    CONF_RTSP_PASSWORD,
+    CONF_RTSP_USERNAME,
     CONF_SCAN_INTERVAL,
     CONF_VERIFY_SSL,
     DEFAULT_ENABLE_CAMERA,
@@ -44,23 +46,24 @@ _LOGGER = logging.getLogger(__name__)
 _VALID_HANGUP_REASONS = {"normal", "rejected", "busy"}
 
 
-def _get_entry_data(entry: ConfigEntry) -> dict[str, object]:
-    """Return merged config data with options overriding defaults."""
-    return {**entry.data, **entry.options}
+def _get_option(entry: ConfigEntry, key: str, default: object = None) -> object:
+    """Return a behavioral option, preferring entry.options over entry.data."""
+    if key in entry.options:
+        return entry.options[key]
+    return entry.data.get(key, default)
 
 
 def _get_platforms(entry: ConfigEntry) -> list[str]:
     """Get list of platforms to set up based on configuration."""
-    data = _get_entry_data(entry)
     platforms: list[str] = []
 
-    if data.get(CONF_ENABLE_CAMERA, DEFAULT_ENABLE_CAMERA):
+    if _get_option(entry, CONF_ENABLE_CAMERA, DEFAULT_ENABLE_CAMERA):
         platforms.append("camera")
 
-    if data.get(CONF_ENABLE_DOORBELL, DEFAULT_ENABLE_DOORBELL):
+    if _get_option(entry, CONF_ENABLE_DOORBELL, DEFAULT_ENABLE_DOORBELL):
         platforms.append("binary_sensor")
 
-    relays = data.get(CONF_RELAYS, [])
+    relays = _get_option(entry, CONF_RELAYS, [])
     if relays:
         platforms.extend(["switch", "cover"])
     else:
@@ -71,12 +74,28 @@ def _get_platforms(entry: ConfigEntry) -> list[str]:
     return platforms
 
 
+def _is_entry_loaded(entry: ConfigEntry) -> bool:
+    """Return True when the entry is actually loaded with valid runtime data."""
+    # ConfigEntryState.LOADED is the canonical check in real HA.
+    # The fallback handles test stubs that don't expose ConfigEntryState.
+    state = getattr(entry, "state", None)
+    if state is not None:
+        loaded_state = getattr(
+            type(state), "LOADED", None
+        ) or getattr(state, "LOADED", None)
+        if loaded_state is not None and state != loaded_state:
+            return False
+    return isinstance(
+        getattr(entry, "runtime_data", None), TwoNIntercomRuntimeData
+    )
+
+
 def _get_loaded_entries(hass: HomeAssistant) -> list[ConfigEntry]:
-    """Return 2N Intercom config entries that have runtime_data wired up."""
+    """Return 2N Intercom config entries that are actually loaded."""
     return [
         entry
         for entry in hass.config_entries.async_entries(DOMAIN)
-        if isinstance(getattr(entry, "runtime_data", None), TwoNIntercomRuntimeData)
+        if _is_entry_loaded(entry)
     ]
 
 
@@ -84,7 +103,12 @@ def _resolve_service_entry(
     hass: HomeAssistant,
     service_data: dict[str, Any],
 ) -> ConfigEntry:
-    """Return the target config entry for a service call."""
+    """Return the target config entry for a service call.
+
+    Raises ``ServiceValidationError`` for bad user input (wrong
+    config_entry_id, ambiguous target) and ``HomeAssistantError`` for
+    runtime problems (no loaded entries).
+    """
     entries = _get_loaded_entries(hass)
     if not entries:
         raise HomeAssistantError(
@@ -97,14 +121,14 @@ def _resolve_service_entry(
         for entry in entries:
             if str(entry.entry_id) == str(config_entry_id):
                 return entry
-        raise HomeAssistantError(
+        raise ServiceValidationError(
             translation_domain=DOMAIN,
             translation_key="entry_not_loaded",
             translation_placeholders={"config_entry_id": str(config_entry_id)},
         )
 
     if len(entries) > 1:
-        raise HomeAssistantError(
+        raise ServiceValidationError(
             translation_domain=DOMAIN,
             translation_key="ambiguous_entry",
         )
@@ -190,13 +214,28 @@ def _register_call_services(hass: HomeAssistant) -> None:
         coordinator = runtime.coordinator
 
         raw_reason = service_data.get("reason")
-        if isinstance(raw_reason, str):
+        reason: str | None = None
+        if raw_reason is not None:
+            if not isinstance(raw_reason, str) or not raw_reason.strip():
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="invalid_hangup_reason",
+                    translation_placeholders={
+                        "reason": str(raw_reason),
+                        "valid": ", ".join(sorted(_VALID_HANGUP_REASONS)),
+                    },
+                )
             normalized_reason = raw_reason.strip().lower()
-        else:
-            normalized_reason = ""
-        reason: str | None = (
-            normalized_reason if normalized_reason in _VALID_HANGUP_REASONS else None
-        )
+            if normalized_reason not in _VALID_HANGUP_REASONS:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="invalid_hangup_reason",
+                    translation_placeholders={
+                        "reason": raw_reason,
+                        "valid": ", ".join(sorted(_VALID_HANGUP_REASONS)),
+                    },
+                )
+            reason = normalized_reason
 
         explicit_session = service_data.get("session_id")
         if explicit_session is not None and str(explicit_session).strip():
@@ -291,8 +330,12 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: TwoNIntercomConfigEntry
 ) -> bool:
     """Set up 2N Intercom from a config entry."""
-    data = _get_entry_data(entry)
-    verify_ssl = data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
+    # Connection identity lives in entry.data (set by initial setup / reauth /
+    # reconfigure). Behavioral preferences live in entry.options (set by the
+    # options flow). This separation ensures reauth/reconfigure always win for
+    # connection fields and the options flow cannot shadow them.
+    conn = entry.data
+    verify_ssl = conn.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
 
     import aiohttp as _aiohttp  # local import — only needed here for the middleware
 
@@ -301,30 +344,38 @@ async def async_setup_entry(
         verify_ssl=verify_ssl,
         middlewares=(
             _aiohttp.DigestAuthMiddleware(
-                data[CONF_USERNAME],
-                data[CONF_PASSWORD],
+                conn[CONF_USERNAME],
+                conn[CONF_PASSWORD],
                 preemptive=False,
             ),
         ),
     )
 
+    # RTSP credentials are optional and live in entry.options because the
+    # 2N RTSP server has its own user database, independent of the HTTP
+    # API accounts configured in entry.data.
+    rtsp_username = str(_get_option(entry, CONF_RTSP_USERNAME) or "") or None
+    rtsp_password = str(_get_option(entry, CONF_RTSP_PASSWORD) or "") or None
+
     api = TwoNIntercomAPI(
-        host=data[CONF_HOST],
-        port=data[CONF_PORT],
-        username=data[CONF_USERNAME],
-        password=data[CONF_PASSWORD],
-        protocol=data.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
+        host=conn[CONF_HOST],
+        port=conn[CONF_PORT],
+        username=conn[CONF_USERNAME],
+        password=conn[CONF_PASSWORD],
+        protocol=conn.get(CONF_PROTOCOL, DEFAULT_PROTOCOL),
         verify_ssl=verify_ssl,
         session=session,
+        rtsp_username=rtsp_username,
+        rtsp_password=rtsp_password,
     )
 
     # Honour the per-entry polling interval from the options flow when set,
     # falling back to the module default. Out-of-bounds values are clamped so
     # a hand-edited entry can't accidentally hammer the device or stall ring
     # detection — the options-flow selector enforces the same range.
-    raw_scan_interval = data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    raw_scan_interval = _get_option(entry, CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
     try:
-        scan_interval = int(raw_scan_interval)
+        scan_interval = int(str(raw_scan_interval))
     except (TypeError, ValueError):
         scan_interval = DEFAULT_SCAN_INTERVAL
     scan_interval = max(SCAN_INTERVAL_MIN, min(scan_interval, SCAN_INTERVAL_MAX))
@@ -333,7 +384,7 @@ async def async_setup_entry(
         hass,
         api,
         scan_interval=scan_interval,
-        called_id=data.get(CONF_CALLED_ID),
+        called_id=str(_get_option(entry, CONF_CALLED_ID) or "") or None,
         config_entry=entry,
     )
 
@@ -397,5 +448,9 @@ async def async_unload_entry(
     if unload_ok and runtime is not None:
         await runtime.coordinator.async_stop_log_listener()
         await runtime.api.async_close()
+        # Clear runtime_data so services and other code that inspects it
+        # cannot reach stale coordinator/API objects after teardown.
+        entry.runtime_data = None  # type: ignore[assignment]  # cleared after unload
 
-    return unload_ok
+    unload_result: bool = unload_ok
+    return unload_result
