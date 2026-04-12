@@ -1,6 +1,6 @@
 rules:
   # Bronze
-  action-setup: done
+  action-setup: todo
   appropriate-polling: done
   brands:
     status: exempt
@@ -15,14 +15,10 @@ rules:
   docs-high-level-description: done
   docs-installation-instructions: done
   docs-removal-instructions: todo
-  entity-event-setup:
-    status: exempt
-    comment: |
-      Entities consume coordinator updates and do not subscribe to bus events
-      directly.
+  entity-event-setup: done
   entity-unique-id: done
   has-entity-name: done
-  runtime-data: todo
+  runtime-data: done
   test-before-configure: done
   test-before-setup: done
   unique-config-entry: done

@@ -262,9 +262,9 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         await answer_call(types.SimpleNamespace(data={}))
         await hangup_call(types.SimpleNamespace(data={"reason": "busy"}))
 
-        stored = hass.data[const_module.DOMAIN][entry.entry_id]
-        self.assertEqual(stored["api"].answer_calls, ["session-123"])
-        self.assertEqual(stored["api"].hangup_calls, [("session-123", "busy")])
+        stored = entry.runtime_data
+        self.assertEqual(stored.api.answer_calls, ["session-123"])
+        self.assertEqual(stored.api.hangup_calls, [("session-123", "busy")])
 
     async def test_service_raises_when_api_reports_failure(self) -> None:
         init_module = self.init_module
@@ -284,7 +284,7 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         hass = FakeHass([entry])
 
         await init_module.async_setup_entry(hass, entry)
-        hass.data[const_module.DOMAIN][entry.entry_id]["api"] = FakeAPI(
+        entry.runtime_data.api = FakeAPI(
             answer_result=False,
             hangup_result=False,
         )
@@ -330,8 +330,8 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
         await hangup_call(types.SimpleNamespace(data={"reason": None}))
 
-        stored = hass.data[const_module.DOMAIN][entry.entry_id]
-        self.assertEqual(stored["api"].hangup_calls, [("session-123", None)])
+        stored = entry.runtime_data
+        self.assertEqual(stored.api.hangup_calls, [("session-123", None)])
 
     async def test_hangup_reason_forwarded_when_explicitly_valid(self) -> None:
         init_module = self.init_module
@@ -355,8 +355,8 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         hangup_call = hass.services.handlers[(const_module.DOMAIN, "hangup_call")]
         await hangup_call(types.SimpleNamespace(data={"reason": "rejected"}))
 
-        stored = hass.data[const_module.DOMAIN][entry.entry_id]
-        self.assertEqual(stored["api"].hangup_calls, [("session-123", "rejected")])
+        stored = entry.runtime_data
+        self.assertEqual(stored.api.hangup_calls, [("session-123", "rejected")])
 
     async def test_service_rejects_ambiguous_target_without_config_entry_id(self) -> None:
         init_module = self.init_module
@@ -385,10 +385,10 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         hass = FakeHass([entry_1, entry_2])
 
         await init_module.async_setup_entry(hass, entry_1)
-        hass.data[const_module.DOMAIN][entry_2.entry_id] = {
-            "coordinator": types.SimpleNamespace(active_session_id="session-999"),
-            "api": FakeAPI(),
-        }
+        entry_2.runtime_data = init_module.TwoNIntercomRuntimeData(
+            coordinator=types.SimpleNamespace(active_session_id="session-999"),
+            api=FakeAPI(),
+        )
 
         answer_call = hass.services.handlers[(const_module.DOMAIN, "answer_call")]
 
@@ -426,10 +426,10 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
         await init_module.async_setup_entry(hass, entry_1)
         await init_module.async_setup_entry(hass, entry_2)
 
-        stored_1 = hass.data[const_module.DOMAIN][entry_1.entry_id]
-        stored_2 = hass.data[const_module.DOMAIN][entry_2.entry_id]
-        stored_1["coordinator"]._active_session_id = "session-one"
-        stored_2["coordinator"]._active_session_id = "session-two"
+        stored_1 = entry_1.runtime_data
+        stored_2 = entry_2.runtime_data
+        stored_1.coordinator._active_session_id = "session-one"
+        stored_2.coordinator._active_session_id = "session-two"
 
         answer_call = hass.services.handlers[(const_module.DOMAIN, "answer_call")]
 
@@ -441,8 +441,8 @@ class IntegrationSetupTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        self.assertEqual(stored_1["api"].answer_calls, [])
-        self.assertEqual(stored_2["api"].answer_calls, ["session-two"])
+        self.assertEqual(stored_1.api.answer_calls, [])
+        self.assertEqual(stored_2.api.answer_calls, ["session-two"])
 
     async def test_setup_and_unload_manage_log_listener_lifecycle(self) -> None:
         init_module = self.init_module

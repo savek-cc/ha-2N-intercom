@@ -9,8 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
-from .coordinator import TwoNIntercomCoordinator
+from .coordinator import TwoNIntercomCoordinator, TwoNIntercomRuntimeData
 from .entity import TwoNIntercomEntity
 
 # Sensors are pure consumers of the coordinator's cached payloads and never
@@ -25,9 +24,8 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up 2N Intercom sensor platform."""
-    coordinator: TwoNIntercomCoordinator = hass.data[DOMAIN][config_entry.entry_id][
-        "coordinator"
-    ]
+    runtime: TwoNIntercomRuntimeData = config_entry.runtime_data
+    coordinator: TwoNIntercomCoordinator = runtime.coordinator
 
     async_add_entities(
         [

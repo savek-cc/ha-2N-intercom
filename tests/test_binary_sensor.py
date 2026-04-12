@@ -74,6 +74,7 @@ def load_binary_sensor_module():
     load_module("custom_components.2n_intercom.const", CONST_PATH)
     coordinator_module = types.ModuleType("custom_components.2n_intercom.coordinator")
     coordinator_module.TwoNIntercomCoordinator = object
+    coordinator_module.TwoNIntercomRuntimeData = object
     sys.modules["custom_components.2n_intercom.coordinator"] = coordinator_module
     load_module("custom_components.2n_intercom.entity", ENTITY_PATH)
     return load_module("custom_components.2n_intercom.binary_sensor", BINARY_SENSOR_PATH)
@@ -127,16 +128,9 @@ class BinarySensorPlatformTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         entry = FakeConfigEntry("entry-1", {"name": "Front Door"})
+        entry.runtime_data = types.SimpleNamespace(coordinator=coordinator)
 
-        hass = types.SimpleNamespace(
-            data={
-                "2n_intercom": {
-                    entry.entry_id: {
-                        "coordinator": coordinator,
-                    }
-                }
-            }
-        )
+        hass = types.SimpleNamespace(data={})
         added: list[object] = []
 
         await binary_sensor_module.async_setup_entry(
@@ -157,16 +151,9 @@ class BinarySensorPlatformTests(unittest.IsolatedAsyncioTestCase):
             io_status={"ports": [{"port": "relay1", "state": 0}]},
         )
         entry = FakeConfigEntry("entry-1", {"name": "Front Door"})
+        entry.runtime_data = types.SimpleNamespace(coordinator=coordinator)
 
-        hass = types.SimpleNamespace(
-            data={
-                "2n_intercom": {
-                    entry.entry_id: {
-                        "coordinator": coordinator,
-                    }
-                }
-            }
-        )
+        hass = types.SimpleNamespace(data={})
         added: list[object] = []
 
         await binary_sensor_module.async_setup_entry(
@@ -195,16 +182,9 @@ class BinarySensorPlatformTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         entry = FakeConfigEntry("entry-1", {"name": "Front Door"})
+        entry.runtime_data = types.SimpleNamespace(coordinator=coordinator)
 
-        hass = types.SimpleNamespace(
-            data={
-                "2n_intercom": {
-                    entry.entry_id: {
-                        "coordinator": coordinator,
-                    }
-                }
-            }
-        )
+        hass = types.SimpleNamespace(data={})
         added: list[object] = []
 
         await binary_sensor_module.async_setup_entry(

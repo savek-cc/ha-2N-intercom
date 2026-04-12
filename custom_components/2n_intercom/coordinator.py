@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta, datetime
 import logging
 from typing import TYPE_CHECKING, Any
@@ -48,6 +48,25 @@ except ImportError:  # pragma: no cover - test stub fallback
         """Fallback for HA stubs that lack ConfigEntryAuthFailed."""
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class TwoNIntercomRuntimeData:
+    """Per-config-entry runtime state held on ``ConfigEntry.runtime_data``.
+
+    Replaces the legacy ``hass.data[DOMAIN][entry.entry_id]`` dict so that
+    every consumer (platforms, services, diagnostics) gets a typed handle
+    instead of bracket-indexing an untyped dict — see the HA quality-scale
+    ``runtime-data`` rule.
+    """
+
+    coordinator: TwoNIntercomCoordinator
+    api: TwoNIntercomAPI
+    loaded_platforms: list[str] = field(default_factory=list)
+
+
+if TYPE_CHECKING:
+    type TwoNIntercomConfigEntry = ConfigEntry[TwoNIntercomRuntimeData]
 
 # Maximum number of retries before giving up
 MAX_RETRIES = 5

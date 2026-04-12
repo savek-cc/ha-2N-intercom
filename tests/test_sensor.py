@@ -70,6 +70,7 @@ def load_sensor_module():
     load_module("custom_components.2n_intercom.const", CONST_PATH)
     coordinator_module = types.ModuleType("custom_components.2n_intercom.coordinator")
     coordinator_module.TwoNIntercomCoordinator = object
+    coordinator_module.TwoNIntercomRuntimeData = object
     sys.modules["custom_components.2n_intercom.coordinator"] = coordinator_module
     load_module("custom_components.2n_intercom.entity", ENTITY_PATH)
     return load_module("custom_components.2n_intercom.sensor", SENSOR_PATH)
@@ -110,16 +111,9 @@ class DiagnosticSensorTests(unittest.IsolatedAsyncioTestCase):
         sensor_module = self.sensor_module
         coordinator = FakeCoordinator()
         entry = FakeConfigEntry("entry-1", {"name": "Front Door"})
+        entry.runtime_data = types.SimpleNamespace(coordinator=coordinator)
 
-        hass = types.SimpleNamespace(
-            data={
-                "2n_intercom": {
-                    entry.entry_id: {
-                        "coordinator": coordinator,
-                    }
-                }
-            }
-        )
+        hass = types.SimpleNamespace(data={})
         added: list[object] = []
 
         await sensor_module.async_setup_entry(

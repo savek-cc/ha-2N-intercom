@@ -13,11 +13,10 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import CameraTransportInfo
 from .const import (
-    DOMAIN,
     LIVE_VIEW_MODE_MJPEG,
     LIVE_VIEW_MODE_RTSP,
 )
-from .coordinator import TwoNIntercomCoordinator
+from .coordinator import TwoNIntercomCoordinator, TwoNIntercomRuntimeData
 
 # Snapshots are served from the coordinator's cache and the live MJPEG stream
 # is proxied by the core MjpegCamera helper, so the camera platform never hits
@@ -76,9 +75,8 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up 2N Intercom camera platform."""
-    coordinator: TwoNIntercomCoordinator = hass.data[DOMAIN][config_entry.entry_id][
-        "coordinator"
-    ]
+    runtime: TwoNIntercomRuntimeData = config_entry.runtime_data
+    coordinator: TwoNIntercomCoordinator = runtime.coordinator
 
     async_add_entities(
         [TwoNIntercomCamera(coordinator, config_entry)],

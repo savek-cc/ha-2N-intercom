@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -33,10 +33,12 @@ from .const import (
     SCAN_INTERVAL_MAX,
     SCAN_INTERVAL_MIN,
 )
-from .coordinator import TwoNIntercomCoordinator
+from .coordinator import TwoNIntercomCoordinator, TwoNIntercomRuntimeData
+
+if TYPE_CHECKING:
+    from .coordinator import TwoNIntercomConfigEntry
 
 _LOGGER = logging.getLogger(__name__)
-_CALL_SERVICE_FLAG = "_call_services_registered"
 _VALID_HANGUP_REASONS = {"normal", "rejected", "busy"}
 
 
@@ -67,47 +69,43 @@ def _get_platforms(entry: ConfigEntry) -> list[str]:
     return platforms
 
 
-def _get_loaded_entries(hass: HomeAssistant) -> dict[str, dict[str, object]]:
-    """Return loaded config-entry data for this integration."""
-    domain_data = hass.data.get(DOMAIN, {})
-    entries: dict[str, dict[str, object]] = {}
-    for entry_id, entry_data in domain_data.items():
-        if not isinstance(entry_data, dict):
-            continue
-        if "coordinator" not in entry_data or "api" not in entry_data:
-            continue
-        entries[str(entry_id)] = entry_data
-    return entries
+def _get_loaded_entries(hass: HomeAssistant) -> list[ConfigEntry]:
+    """Return 2N Intercom config entries that have runtime_data wired up."""
+    return [
+        entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if isinstance(getattr(entry, "runtime_data", None), TwoNIntercomRuntimeData)
+    ]
 
 
 def _resolve_service_entry(
     hass: HomeAssistant,
     service_data: dict[str, Any],
-) -> dict[str, object]:
-    """Return the target config-entry data for a service call."""
+) -> ConfigEntry:
+    """Return the target config entry for a service call."""
     entries = _get_loaded_entries(hass)
     if not entries:
         raise HomeAssistantError("2N Intercom has no loaded config entries.")
 
     config_entry_id = service_data.get("config_entry_id")
     if config_entry_id:
-        entry = entries.get(str(config_entry_id))
-        if entry is None:
-            raise HomeAssistantError(
-                f"Config entry {config_entry_id!r} is not loaded for 2N Intercom."
-            )
-        return entry
+        for entry in entries:
+            if str(entry.entry_id) == str(config_entry_id):
+                return entry
+        raise HomeAssistantError(
+            f"Config entry {config_entry_id!r} is not loaded for 2N Intercom."
+        )
 
     if len(entries) > 1:
         raise HomeAssistantError(
             "Multiple 2N Intercom config entries are loaded; include config_entry_id."
         )
 
-    return next(iter(entries.values()))
+    return entries[0]
 
 
 def _resolve_session_id(
-    entry_data: dict[str, object],
+    runtime: TwoNIntercomRuntimeData,
     service_data: dict[str, Any],
 ) -> str:
     """Return the call session id to act on."""
@@ -115,8 +113,7 @@ def _resolve_session_id(
     if session_id is not None and str(session_id).strip():
         return str(session_id).strip()
 
-    coordinator = entry_data["coordinator"]
-    coordinator_session_id = getattr(coordinator, "active_session_id", None)
+    coordinator_session_id = getattr(runtime.coordinator, "active_session_id", None)
     if coordinator_session_id is not None and str(coordinator_session_id).strip():
         return str(coordinator_session_id).strip()
 
@@ -145,16 +142,15 @@ def _extract_session_ids_from_status(status: Any) -> list[str]:
 
 def _register_call_services(hass: HomeAssistant) -> None:
     """Register call-control services once per Home Assistant instance."""
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    if domain_data.get(_CALL_SERVICE_FLAG):
+    if hass.services.has_service(DOMAIN, "answer_call"):
         return
 
     async def _async_answer_call(call: Any) -> None:
         service_data = dict(getattr(call, "data", {}) or {})
-        entry_data = _resolve_service_entry(hass, service_data)
-        session_id = _resolve_session_id(entry_data, service_data)
-        api = entry_data["api"]
-        if not await api.async_answer_call(session_id):
+        entry = _resolve_service_entry(hass, service_data)
+        runtime: TwoNIntercomRuntimeData = entry.runtime_data
+        session_id = _resolve_session_id(runtime, service_data)
+        if not await runtime.api.async_answer_call(session_id):
             raise HomeAssistantError(f"Failed to answer call session {session_id}.")
 
     async def _async_hangup_call(call: Any) -> None:
@@ -173,8 +169,10 @@ def _register_call_services(hass: HomeAssistant) -> None:
         outgoing-ringing sessions while still answering ``success: true``.
         """
         service_data = dict(getattr(call, "data", {}) or {})
-        entry_data = _resolve_service_entry(hass, service_data)
-        api = entry_data["api"]
+        entry = _resolve_service_entry(hass, service_data)
+        runtime: TwoNIntercomRuntimeData = entry.runtime_data
+        api = runtime.api
+        coordinator = runtime.coordinator
 
         raw_reason = service_data.get("reason")
         if isinstance(raw_reason, str):
@@ -214,7 +212,6 @@ def _register_call_services(hass: HomeAssistant) -> None:
         )
 
         live_sessions = _extract_session_ids_from_status(status)
-        coordinator = entry_data["coordinator"]
         cached = getattr(coordinator, "active_session_id", None)
         _LOGGER.debug(
             "2n_intercom.hangup_call: extracted live sessions=%s, coordinator cached=%s",
@@ -258,13 +255,12 @@ def _register_call_services(hass: HomeAssistant) -> None:
 
     hass.services.async_register(DOMAIN, "answer_call", _async_answer_call)
     hass.services.async_register(DOMAIN, "hangup_call", _async_hangup_call)
-    domain_data[_CALL_SERVICE_FLAG] = True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(
+    hass: HomeAssistant, entry: TwoNIntercomConfigEntry
+) -> bool:
     """Set up 2N Intercom from a config entry."""
-    hass.data.setdefault(DOMAIN, {})
-
     data = _get_entry_data(entry)
     api = TwoNIntercomAPI(
         host=data[CONF_HOST],
@@ -300,10 +296,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_initialize_static_caches()
     await coordinator.async_config_entry_first_refresh()
 
-    hass.data[DOMAIN][entry.entry_id] = {
-        "coordinator": coordinator,
-        "api": api,
-    }
+    entry.runtime_data = TwoNIntercomRuntimeData(coordinator=coordinator, api=api)
 
     _register_call_services(hass)
     await coordinator.async_start_log_listener()
@@ -327,32 +320,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Remember exactly which platforms were forwarded so unload tears down the
     # same set even if the user later changes options that would shift
     # _get_platforms() output (e.g. enabling relays flips lock <-> switch+cover).
-    hass.data[DOMAIN][entry.entry_id]["loaded_platforms"] = list(platforms)
+    entry.runtime_data.loaded_platforms = list(platforms)
 
     entry.async_on_unload(entry.add_update_listener(async_update_options))
     return True
 
 
-async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+async def async_update_options(
+    hass: HomeAssistant, entry: TwoNIntercomConfigEntry
+) -> None:
     """Update options."""
     await hass.config_entries.async_reload(entry.entry_id)
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(
+    hass: HomeAssistant, entry: TwoNIntercomConfigEntry
+) -> bool:
     """Unload a config entry."""
     # Use the platform list captured at setup so we tear down exactly what was
     # forwarded; recomputing from the merged data here would lie if options
     # changed (e.g. relay_count went from 0 to 1) and try to unload platforms
     # that were never loaded.
-    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
-    platforms = entry_data.get("loaded_platforms") or _get_platforms(entry)
+    runtime: TwoNIntercomRuntimeData | None = getattr(entry, "runtime_data", None)
+    platforms = (
+        runtime.loaded_platforms if runtime and runtime.loaded_platforms
+        else _get_platforms(entry)
+    )
     unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
 
-    if unload_ok:
-        data = hass.data[DOMAIN].pop(entry.entry_id)
-        if "coordinator" in data:
-            await data["coordinator"].async_stop_log_listener()
-        if "api" in data:
-            await data["api"].async_close()
+    if unload_ok and runtime is not None:
+        await runtime.coordinator.async_stop_log_listener()
+        await runtime.api.async_close()
 
     return unload_ok

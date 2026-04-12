@@ -18,9 +18,8 @@ from .const import (
     CONF_RELAYS,
     DEFAULT_PULSE_DURATION,
     DEVICE_TYPE_DOOR,
-    DOMAIN,
 )
-from .coordinator import TwoNIntercomCoordinator
+from .coordinator import TwoNIntercomCoordinator, TwoNIntercomRuntimeData
 from .entity import TwoNIntercomEntity
 
 # Switch actions hit the device (relay trigger) so we serialise them per
@@ -36,10 +35,9 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up 2N Intercom switch platform."""
-    coordinator: TwoNIntercomCoordinator = hass.data[DOMAIN][config_entry.entry_id][
-        "coordinator"
-    ]
-    
+    runtime: TwoNIntercomRuntimeData = config_entry.runtime_data
+    coordinator: TwoNIntercomCoordinator = runtime.coordinator
+
     relays = {**config_entry.data, **config_entry.options}.get(CONF_RELAYS, [])
     
     # Create switch entities for door-type relays

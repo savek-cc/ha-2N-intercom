@@ -13,8 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
-from .coordinator import TwoNIntercomCoordinator
+from .coordinator import TwoNIntercomCoordinator, TwoNIntercomRuntimeData
 from .entity import TwoNIntercomEntity
 
 # Entities are pure consumers of the coordinator's cached data and never hit
@@ -61,9 +60,8 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up 2N Intercom binary sensor platform."""
-    coordinator: TwoNIntercomCoordinator = hass.data[DOMAIN][config_entry.entry_id][
-        "coordinator"
-    ]
+    runtime: TwoNIntercomRuntimeData = config_entry.runtime_data
+    coordinator: TwoNIntercomCoordinator = runtime.coordinator
     entities: list[BinarySensorEntity] = [TwoNIntercomDoorbell(coordinator, config_entry)]
 
     if _port_exists(coordinator.io_caps, "input1", port_type="input") and _port_exists(

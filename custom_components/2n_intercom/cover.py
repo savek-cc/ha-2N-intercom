@@ -22,9 +22,8 @@ from .const import (
     CONF_RELAYS,
     DEFAULT_GATE_DURATION,
     DEVICE_TYPE_GATE,
-    DOMAIN,
 )
-from .coordinator import TwoNIntercomCoordinator
+from .coordinator import TwoNIntercomCoordinator, TwoNIntercomRuntimeData
 from .entity import TwoNIntercomEntity
 
 # Cover actions hit the device (relay trigger) so we serialise them per
@@ -40,10 +39,9 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up 2N Intercom cover platform."""
-    coordinator: TwoNIntercomCoordinator = hass.data[DOMAIN][config_entry.entry_id][
-        "coordinator"
-    ]
-    
+    runtime: TwoNIntercomRuntimeData = config_entry.runtime_data
+    coordinator: TwoNIntercomCoordinator = runtime.coordinator
+
     relays = {**config_entry.data, **config_entry.options}.get(CONF_RELAYS, [])
     
     # Create cover entities for gate-type relays

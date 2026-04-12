@@ -78,6 +78,7 @@ def load_lock_module():
     const_module = load_module("custom_components.2n_intercom.const", CONST_PATH)
     coordinator_module = types.ModuleType("custom_components.2n_intercom.coordinator")
     coordinator_module.TwoNIntercomCoordinator = object
+    coordinator_module.TwoNIntercomRuntimeData = object
     sys.modules["custom_components.2n_intercom.coordinator"] = coordinator_module
     load_module("custom_components.2n_intercom.entity", ENTITY_PATH)
     lock_module = load_module("custom_components.2n_intercom.lock", LOCK_PATH)
