@@ -165,9 +165,6 @@
       },
       "relay_1_active": {
         "name": "Relé 1 aktivní"
-      },
-      "motion": {
-        "name": "Pohyb"
       }
     },
     "sensor": {

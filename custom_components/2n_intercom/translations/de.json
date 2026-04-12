@@ -1,0 +1,244 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "2N Gegensprechanlage einrichten",
+        "description": "Geben Sie die IP-Adresse und API-Zugangsdaten Ihrer 2N Gegensprechanlage ein. Das Verbindungsprotokoll wird automatisch erkannt.",
+        "data": {
+          "host": "IP-Adresse",
+          "username": "Benutzername",
+          "password": "Passwort"
+        },
+        "data_description": {
+          "host": "IP-Adresse oder Hostname des Geräts (z.\u00a0B. 192.0.2.100)",
+          "username": "Anmeldename des Geräts für den API-Zugang",
+          "password": "Anmeldepasswort des Geräts"
+        }
+      },
+      "device": {
+        "title": "2N Gegensprechanlage - Gerät",
+        "description": "Gerätefunktionen konfigurieren. Relais können später in den Integrationsoptionen eingerichtet werden.",
+        "data": {
+          "name": "Name",
+          "enable_camera": "Kamera aktivieren",
+          "enable_doorbell": "Klingel aktivieren",
+          "called_id": "Rufkonto (Peer)"
+        },
+        "data_description": {
+          "name": "Anzeigename in Home Assistant",
+          "enable_camera": "Kamera-Entität für Schnappschüsse und Streaming anlegen",
+          "enable_doorbell": "Klingel-Entität zur Klingelerkennung anlegen",
+          "called_id": "Wählen Sie das Konto, das klingeln soll. Alle Anrufe = Klingeln bei jeder Taste."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zum Gerät fehlgeschlagen. Bitte IP-Adresse, Port und Zugangsdaten prüfen."
+    },
+    "abort": {
+      "already_configured": "Diese 2N Gegensprechanlage ist bereits konfiguriert.",
+      "reauth_successful": "Zugangsdaten erfolgreich aktualisiert.",
+      "reconfigure_successful": "Gerätekonfiguration erfolgreich aktualisiert."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "2N Gegensprechanlage - Optionen",
+        "data": {
+          "door_type": "Türtyp (Legacy)",
+          "enable_camera": "Kamera aktivieren",
+          "enable_doorbell": "Klingel aktivieren"
+        }
+      },
+      "device": {
+        "title": "2N Gegensprechanlage - Gerät",
+        "description": "Gerätefunktionen anpassen",
+        "data": {
+          "name": "Name",
+          "enable_camera": "Kamera aktivieren",
+          "enable_doorbell": "Klingel aktivieren",
+          "scan_interval": "Abfrageintervall (Sekunden)",
+          "relay_count": "Anzahl Relais",
+          "door_type": "Türtyp (Legacy)",
+          "called_id": "Rufkonto (Peer)"
+        },
+        "data_description": {
+          "name": "Anzeigename in Home Assistant",
+          "enable_camera": "Kamera-Entität anlegen",
+          "enable_doorbell": "Klingel-Entität anlegen",
+          "scan_interval": "Wie oft die Integration den Gerätestatus abfragt (2-300 s). Niedrigere Werte erkennen Klingeln schneller, belasten aber das Gerät stärker.",
+          "relay_count": "Wie viele Relais konfiguriert werden sollen (0-4)",
+          "door_type": "Legacy-Schlosstyp (Tür oder Tor)",
+          "called_id": "Wählen Sie das Konto, das klingeln soll. Alle Anrufe = Klingeln bei jeder Taste."
+        }
+      },
+      "camera": {
+        "title": "2N Gegensprechanlage - Kamera",
+        "description": "Videostream der 2N-Kamera in Home Assistant optimieren. Niedrigere MJPEG-Auflösung und Bildrate reduzieren den Datenverkehr auf dauerhaft sichtbaren Dashboards erheblich.",
+        "data": {
+          "live_view_mode": "Live-Ansicht",
+          "camera_source": "Kameraquelle",
+          "mjpeg_width": "MJPEG-Breite (Pixel)",
+          "mjpeg_height": "MJPEG-Höhe (Pixel)",
+          "mjpeg_fps": "MJPEG-Bildrate (fps)",
+          "rtsp_username": "RTSP-Benutzername",
+          "rtsp_password": "RTSP-Passwort"
+        },
+        "data_description": {
+          "live_view_mode": "Auto wählt RTSP wenn RTSP-Zugangsdaten konfiguriert und gültig sind, dann MJPEG, dann nur JPEG-Schnappschüsse",
+          "camera_source": "Welcher Sensor am Gerät gestreamt wird — Internal ist die eingebaute Kamera, External ein sekundäres Kameramodul (falls vorhanden)",
+          "mjpeg_width": "Breite des MJPEG-Streams vom Gerät (z.\u00a0B. 640)",
+          "mjpeg_height": "Höhe des MJPEG-Streams vom Gerät (z.\u00a0B. 480)",
+          "mjpeg_fps": "Bilder pro Sekunde für den MJPEG-Stream (1-15)",
+          "rtsp_username": "Benutzername für den 2N-RTSP-Streamingdienst (wird separat von der HTTP-API in der Geräte-Weboberfläche unter Dienste > Streaming konfiguriert)",
+          "rtsp_password": "Passwort für das RTSP-Streaming-Konto"
+        }
+      },
+      "relay": {
+        "title": "2N Gegensprechanlage - Relais {relay_number}",
+        "description": "Relais {relay_number} anpassen",
+        "data": {
+          "relay_name": "Relaisname",
+          "relay_number": "Relaisnummer",
+          "relay_device_type": "Gerätetyp"
+        },
+        "data_description": {
+          "relay_name": "Anzeigename für dieses Relais",
+          "relay_number": "Physische Relaisnummer am Gerät (1-4)",
+          "relay_device_type": "Tür erzeugt einen Schalter, Tor erzeugt eine Abdeckung"
+        }
+      },
+      "relay_pulse": {
+        "title": "2N Gegensprechanlage - Relais {relay_number} Puls",
+        "description": "Wie lange Relais {relay_number} aktiviert wird ({device_type}). Türschlösser benötigen typisch ~2000 ms, Torantriebe ~15000 ms.",
+        "data": {
+          "relay_pulse_duration": "Pulsdauer (Millisekunden)"
+        },
+        "data_description": {
+          "relay_pulse_duration": "Länge des Schaltpulses an das Relais (ms)"
+        }
+      }
+    }
+  },
+  "selector": {
+    "door_type": {
+      "options": {
+        "door": "Tür",
+        "gate": "Tor"
+      }
+    },
+    "live_view_mode": {
+      "options": {
+        "auto": "Auto (RTSP > MJPEG > Schnappschüsse)",
+        "rtsp": "Nur RTSP",
+        "mjpeg": "Nur MJPEG",
+        "jpeg_only": "Nur JPEG-Schnappschüsse"
+      }
+    },
+    "camera_source": {
+      "options": {
+        "internal": "Internal (eingebaute Kamera)",
+        "external": "External (sekundäres Modul)"
+      }
+    },
+    "protocol": {
+      "options": {
+        "http": "HTTP",
+        "https": "HTTPS"
+      }
+    },
+    "relay_device_type": {
+      "options": {
+        "door": "Tür (Schalter)",
+        "gate": "Tor (Garagentorantrieb)"
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "doorbell": {
+        "name": "Klingel"
+      },
+      "input_1": {
+        "name": "Eingang 1"
+      },
+      "relay_1_active": {
+        "name": "Relais 1 aktiv"
+      }
+    },
+    "sensor": {
+      "sip_registration": {
+        "name": "SIP-Registrierung"
+      },
+      "call_state": {
+        "name": "Anrufstatus"
+      }
+    },
+    "camera": {
+      "camera": {
+        "name": "Kamera"
+      }
+    }
+  },
+  "exceptions": {
+    "no_loaded_entries": {
+      "message": "2N Gegensprechanlage hat keine geladenen Konfigurationseinträge."
+    },
+    "entry_not_loaded": {
+      "message": "Konfigurationseintrag {config_entry_id} ist nicht geladen für 2N Gegensprechanlage."
+    },
+    "ambiguous_entry": {
+      "message": "Mehrere Konfigurationseinträge für 2N Gegensprechanlage geladen; bitte config_entry_id angeben."
+    },
+    "no_active_session": {
+      "message": "Keine aktive Anrufsitzung vorhanden."
+    },
+    "answer_call_failed": {
+      "message": "Anruf der Sitzung {session_id} konnte nicht angenommen werden."
+    },
+    "hangup_call_failed": {
+      "message": "Anruf der Sitzung {session_id} konnte nicht beendet werden."
+    },
+    "call_status_query_failed": {
+      "message": "Anrufstatus konnte vor dem Auflegen nicht abgefragt werden: {error}"
+    },
+    "hangup_partial_failure": {
+      "message": "Anrufsitzung(en) {sessions} konnten nicht beendet werden."
+    }
+  },
+  "services": {
+    "answer_call": {
+      "name": "Anruf annehmen",
+      "description": "Aktiven 2N-Gegensprechanlagen-Anruf oder eine bestimmte Sitzung annehmen.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Konfigurations-ID",
+          "description": "Bestimmten 2N-Konfigurationseintrag ansprechen, wenn mehrere geladen sind."
+        },
+        "session_id": {
+          "name": "Sitzungs-ID",
+          "description": "Aktive Anrufsitzung zum Annehmen überschreiben."
+        }
+      }
+    },
+    "hangup_call": {
+      "name": "Anruf auflegen",
+      "description": "Aktiven 2N-Gegensprechanlagen-Anruf oder eine bestimmte Sitzung auflegen.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Konfigurations-ID",
+          "description": "Bestimmten 2N-Konfigurationseintrag ansprechen, wenn mehrere geladen sind."
+        },
+        "session_id": {
+          "name": "Sitzungs-ID",
+          "description": "Aktive Anrufsitzung zum Auflegen überschreiben."
+        },
+        "reason": {
+          "name": "Grund",
+          "description": "Auflegegrund, der an das Gerät gesendet wird."
+        }
+      }
+    }
+  }
+}

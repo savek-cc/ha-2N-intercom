@@ -96,7 +96,6 @@ class TwoNIntercomDoorbell(TwoNIntercomEntity, BinarySensorEntity):  # type: ign
     """
 
     _attr_translation_key = "doorbell"
-    _attr_device_class = BinarySensorDeviceClass.OCCUPANCY
 
     def __init__(
         self,
@@ -215,7 +214,6 @@ class TwoNIntercomMotionSensor(TwoNIntercomEntity, BinarySensorEntity):  # type:
     as ``"active,licensed"``.
     """
 
-    _attr_translation_key = "motion"
     _attr_device_class = BinarySensorDeviceClass.MOTION
 
     def __init__(

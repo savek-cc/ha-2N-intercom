@@ -169,9 +169,6 @@
       },
       "relay_1_active": {
         "name": "Relay 1 active"
-      },
-      "motion": {
-        "name": "Motion"
       }
     },
     "sensor": {

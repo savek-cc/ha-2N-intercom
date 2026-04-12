@@ -22,7 +22,6 @@ def _install_homeassistant_stubs() -> None:
 
     class BinarySensorDeviceClass:
         MOTION = "motion"
-        OCCUPANCY = "occupancy"
 
     class BinarySensorEntity:
         def __init__(self) -> None:
@@ -528,14 +527,15 @@ class BinarySensorPlatformTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(entity._attr_device_class, "motion")
 
-    def test_motion_sensor_translation_key(self) -> None:
+    def test_motion_sensor_no_translation_key(self) -> None:
+        """Motion name comes from device_class, not a translation_key."""
         binary_sensor_module = self.binary_sensor_module
         coordinator = FakeCoordinator()
         entity = binary_sensor_module.TwoNIntercomMotionSensor(
             coordinator,
             FakeConfigEntry("entry-1", {"name": "Door"}),
         )
-        self.assertEqual(entity._attr_translation_key, "motion")
+        self.assertFalse(hasattr(entity, "_attr_translation_key"))
         self.assertTrue(entity._attr_has_entity_name)
 
     def test_motion_sensor_unique_id(self) -> None:
