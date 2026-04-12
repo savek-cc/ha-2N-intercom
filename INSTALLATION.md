@@ -26,34 +26,27 @@ Restart HA to pick up the new integration.
 
 ### 4. Configure
 
-The wizard has three steps:
+The wizard has two steps:
 
-- **Connection** — host, port, protocol (HTTP/HTTPS), username, password, verify SSL
-- **Device** — display name, enable camera, enable doorbell, relay count (0-4), optional ringing peer
-- **Relay** (one per relay) — name, physical relay number, device type (door / gate), pulse duration
+- **Connection** — host, username, password. Protocol (HTTPS/HTTP) and port (443/80) are auto-detected
+- **Device** — display name, enable camera, enable doorbell, optional ringing account (peer)
+
+Relays are auto-discovered from the device and configured later via the **Options** flow (Settings → Devices & Services → 2N Intercom → **Configure**).
 
 Example:
 
 ```
 Connection
-  Host: 192.168.2.20
-  Protocol: HTTPS
+  Host: 192.0.2.20
   Username: homeassistant
   Password: ****
-  Verify SSL: no
+  → auto-detects HTTPS:443
 
 Device
   Name: Front Door
   Camera: yes
   Doorbell: yes
-  Relays: 1
   Ringing account: All calls
-
-Relay 1
-  Name: Front Door
-  Number: 1
-  Type: Door
-  Pulse: 2000 ms
 ```
 
 ### 5. Verify in Home Assistant
@@ -66,9 +59,8 @@ After setup you should see:
 - `binary_sensor.<name>_relay_1_active` — real cached relay state
 - `sensor.<name>_sip_registration` — SIP registration diagnostic
 - `sensor.<name>_call_state` — call state with `active_session_id` attribute
-- `switch.<name>_<relay_name>` for door-type relays
-- `cover.<name>_<relay_name>` for gate-type relays
-- `lock.<name>_lock` only when no relays are configured (legacy fallback)
+- `switch.<name>_<relay_name>` for door-type relays (auto-discovered)
+- `cover.<name>_<relay_name>` for gate-type relays (after options flow override)
 
 ### 6. HomeKit (optional)
 
@@ -80,7 +72,6 @@ If you run the HA HomeKit Bridge, the camera entity exposes a HomeKit-compatible
 - **Doorbell** — automate on `binary_sensor.<name>_doorbell` turning `on`. The `sensor.<name>_call_state` entity carries the `active_session_id` attribute you'll need to terminate the same session
 - **Door relay** — call `switch.turn_on` (the relay self-resets after the configured pulse duration)
 - **Gate relay** — call `cover.open_cover` / `cover.close_cover`
-- **Legacy lock** — `lock.lock` / `lock.unlock` only when no relays are configured
 
 ## Reconfiguring or Re-authenticating
 
@@ -146,13 +137,13 @@ Add the integration multiple times to drive several intercoms — each entry has
 
 Implemented:
 
-- Connection / device / relay config flow + reauth + reconfigure
+- Connection / device config flow + reauth + reconfigure + options flow
 - Native MJPEG live view (no ffmpeg) and RTSP fallback
 - Push-driven ring detection with polling fallback
 - Diagnostic sensors (SIP registration, call state)
 - Real cached relay/input state
 - `answer_call` / `hangup_call` services
-- Switch / cover entities for relays; legacy lock fallback
+- Auto-discovered switch / cover entities for relays
 - HomeKit bridge mapping
 - Full HA 2026.4+ compliance
 

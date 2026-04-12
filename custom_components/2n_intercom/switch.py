@@ -219,9 +219,7 @@ class TwoNIntercomSwitch(TwoNIntercomEntity, SwitchEntity):  # type: ignore[misc
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the switch on (trigger relay)."""
-        # Cancel any pending turn off task
-        if self._turning_off_task and not self._turning_off_task.done():
-            self._turning_off_task.cancel()
+        self._cancel_turning_off_task()
 
         # Trigger relay
         success = await self.coordinator.async_trigger_relay(
@@ -233,21 +231,35 @@ class TwoNIntercomSwitch(TwoNIntercomEntity, SwitchEntity):  # type: ignore[misc
             self._attr_is_on = True
             self.async_write_ha_state()
 
-            # Schedule automatic turn off after pulse duration
-            self._turning_off_task = asyncio.create_task(
-                self._async_turn_off_after_delay()
-            )
+            # Schedule automatic turn off after pulse duration.
+            # Use hass.async_create_task for proper lifecycle tracking;
+            # fall back to asyncio.create_task in test environments.
+            coro = self._async_turn_off_after_delay()
+            if self.hass is not None:
+                self._turning_off_task = self.hass.async_create_task(
+                    coro, eager_start=False,
+                )
+            else:
+                self._turning_off_task = asyncio.create_task(coro)
         else:
             _LOGGER.error("Failed to trigger relay %s", self._relay_number)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the switch off (no actual action, just update state)."""
-        # Cancel any pending turn off task
-        if self._turning_off_task and not self._turning_off_task.done():
-            self._turning_off_task.cancel()
-
+        self._cancel_turning_off_task()
         self._attr_is_on = False
         self.async_write_ha_state()
+
+    def _cancel_turning_off_task(self) -> None:
+        """Cancel any pending delayed turn-off task."""
+        if self._turning_off_task and not self._turning_off_task.done():
+            self._turning_off_task.cancel()
+            self._turning_off_task = None
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Clean up when entity is removed."""
+        self._cancel_turning_off_task()
+        await super().async_will_remove_from_hass()
 
     async def _async_turn_off_after_delay(self) -> None:
         """Turn off the switch after the pulse duration."""

@@ -25,7 +25,6 @@ from .const import (
     CAMERA_SOURCES,
     CONF_CALLED_ID,
     CONF_CAMERA_SOURCE,
-    CONF_DOOR_TYPE,
     CONF_ENABLE_CAMERA,
     CONF_ENABLE_DOORBELL,
     CONF_LIVE_VIEW_MODE,
@@ -33,7 +32,6 @@ from .const import (
     CONF_MJPEG_HEIGHT,
     CONF_MJPEG_WIDTH,
     CONF_PROTOCOL,
-    CONF_RELAY_COUNT,
     CONF_RELAY_DEVICE_TYPE,
     CONF_RELAY_NAME,
     CONF_RELAY_NUMBER,
@@ -50,21 +48,16 @@ from .const import (
     DEFAULT_CAMERA_SOURCE,
     DEFAULT_ENABLE_CAMERA,
     DEFAULT_ENABLE_DOORBELL,
-    DEFAULT_GATE_DURATION,
     DEFAULT_LIVE_VIEW_MODE,
     DEFAULT_PORT_HTTP,
     DEFAULT_PORT_HTTPS,
     DEFAULT_PROTOCOL,
     DEFAULT_PULSE_DURATION,
-    DEFAULT_RELAY_COUNT,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_VERIFY_SSL,
     DEVICE_TYPE_DOOR,
     DEVICE_TYPE_GATE,
     DOMAIN,
-    DOOR_TYPE_DOOR,
-    DOOR_TYPE_GATE,
-    DOOR_TYPES,
     LIVE_VIEW_MODES,
     PROTOCOL_HTTP,
     PROTOCOL_HTTPS,
@@ -72,6 +65,7 @@ from .const import (
     SCAN_INTERVAL_MAX,
     SCAN_INTERVAL_MIN,
 )
+from .coordinator import TwoNIntercomRuntimeData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -296,9 +290,9 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
         """Handle device configuration step.
 
         Relays are not configured here — the integration auto-discovers
-        them from ``/api/switch/caps`` at runtime and defaults to a lock
-        entity. The user can assign relay types (door switch / gate cover)
-        and pulse durations in the options flow after setup.
+        them from ``/api/switch/caps`` at runtime.  The user can assign
+        relay types (door switch / gate cover) and pulse durations in the
+        options flow after setup.
         """
         errors: dict[str, str] = {}
 
@@ -536,7 +530,7 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
         new_host = self._data.get(CONF_HOST)
         domain = getattr(self, "handler", "2n_intercom")
         for entry in self.hass.config_entries.async_entries(domain):
-            existing_data = entry.data or {}
+            existing_data: Mapping[str, Any] = entry.data or {}
             if serial and existing_data.get(CONF_SERIAL_NUMBER) == serial:
                 return self.async_abort(reason="already_configured")
             if new_host and existing_data.get(CONF_HOST) == new_host:
@@ -577,7 +571,7 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):  # type: ignore[misc]
         del config_entry  # provided by the framework as self.config_entry
         self._data: dict[str, Any] = {}
         self._relays: list[dict[str, Any]] = []
-        self._pending_relay: dict[str, Any] | None = None
+        self._detected_relays: list[dict[str, Any]] = []
 
     def _current_option(self, key: str, default: Any = None) -> Any:
         """Return current value for a behavioral option.
@@ -619,12 +613,6 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):  # type: ignore[misc]
                 custom_value=True,
             )
         )
-
-        relays = self._current_option(CONF_RELAYS, [])
-        derived_door_type = DOOR_TYPE_GATE if any(
-            relay.get(CONF_RELAY_DEVICE_TYPE) == DEVICE_TYPE_GATE
-            for relay in relays
-        ) else DOOR_TYPE_DOOR
 
         if user_input is not None:
             # NumberSelector returns floats; coerce so the int round-trips
@@ -675,14 +663,6 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):  # type: ignore[misc]
                         CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
                     ),
                 ): scan_interval_field,
-                vol.Required(
-                    CONF_RELAY_COUNT,
-                    default=self._current_option(CONF_RELAY_COUNT, DEFAULT_RELAY_COUNT),
-                ): vol.In([0, 1, 2, 3, 4]),
-                vol.Required(
-                    CONF_DOOR_TYPE,
-                    default=self._current_option(CONF_DOOR_TYPE, derived_door_type),
-                ): vol.In(DOOR_TYPES),
                 vol.Optional(
                     CONF_CALLED_ID,
                     default=default_called,
@@ -825,58 +805,98 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):  # type: ignore[misc]
             errors=errors,
         )
 
-    async def _async_after_camera_step(self) -> ConfigFlowResult:
-        """Continue the options flow after the (optional) camera step."""
-        relay_count = self._data.get(CONF_RELAY_COUNT, DEFAULT_RELAY_COUNT)
-        if relay_count > 0:
-            self._relays = []
-            return await self.async_step_relay(relay_index=0)
+    def _get_existing_relay_override(self, relay_number: int) -> dict[str, Any]:
+        """Return previously saved override for *relay_number*, if any."""
+        for relay in self._current_option(CONF_RELAYS, []) or []:
+            if isinstance(relay, dict) and relay.get(CONF_RELAY_NUMBER) == relay_number:
+                return relay
+        return {}
 
-        self._data[CONF_RELAYS] = []
-        return await self._async_create_entry()
+    async def _async_after_camera_step(self) -> ConfigFlowResult:
+        """Continue after the (optional) camera step.
+
+        Discovers relays from the running coordinator's switch_caps and
+        offers per-relay overrides (name, device type, pulse duration).
+        If no relays are detected or the entry isn't loaded, relay
+        configuration is skipped.
+        """
+        runtime: TwoNIntercomRuntimeData | None = getattr(
+            self.config_entry, "runtime_data", None
+        )
+        if runtime is not None:
+            caps = runtime.coordinator.switch_caps
+            switches = caps.get("switches") or []
+            self._detected_relays = [
+                s
+                for s in switches
+                if isinstance(s, dict)
+                and s.get("enabled")
+                and isinstance(s.get("switch"), int)
+            ]
+        else:
+            self._detected_relays = []
+
+        if not self._detected_relays:
+            self._data[CONF_RELAYS] = []
+            return await self._async_create_entry()
+
+        self._relays = []
+        return await self.async_step_relay(relay_index=0)
 
     async def async_step_relay(
         self, user_input: dict[str, Any] | None = None, relay_index: int = 0
     ) -> ConfigFlowResult:
-        """Collect relay name/number/device-type for one relay (options flow).
+        """Collect overrides for one auto-detected relay.
 
-        Mirrors the initial config flow's split: device-type lives here so the
-        follow-up pulse step can pick the right default for door vs gate.
+        Shows name, device type (door/gate), and pulse duration in a
+        single step.  The relay number is fixed — it comes from the
+        device's ``/api/switch/caps`` response.
         """
         errors: dict[str, str] = {}
-        existing_relays = self._current_option(CONF_RELAYS, [])
 
         if user_input is not None:
-            self._pending_relay = user_input
-            return await self.async_step_relay_pulse(relay_index=relay_index)
+            self._relays.append(user_input)
+            if len(self._relays) < len(self._detected_relays):
+                return await self.async_step_relay(
+                    relay_index=len(self._relays)
+                )
+            self._data[CONF_RELAYS] = self._relays
+            return await self._async_create_entry()
 
-        relay_display_number = relay_index + 1
-        default_relay = (
-            existing_relays[relay_index]
-            if relay_index < len(existing_relays)
-            else {}
-        )
+        cap = self._detected_relays[relay_index]
+        relay_number = cap["switch"]
+        existing = self._get_existing_relay_override(relay_number)
+
+        # Default pulse from device's switchOnDuration (seconds → ms).
+        device_duration_s = cap.get("switchOnDuration")
+        if isinstance(device_duration_s, (int, float)) and device_duration_s > 0:
+            default_pulse = int(device_duration_s * 1000)
+        else:
+            default_pulse = DEFAULT_PULSE_DURATION
 
         data_schema = vol.Schema(
             {
                 vol.Required(
+                    CONF_RELAY_NUMBER, default=relay_number
+                ): vol.In([relay_number]),
+                vol.Required(
                     CONF_RELAY_NAME,
-                    default=default_relay.get(
-                        CONF_RELAY_NAME, f"Relay {relay_display_number}"
+                    default=existing.get(
+                        CONF_RELAY_NAME, f"Relay {relay_number}"
                     ),
                 ): cv.string,
                 vol.Required(
-                    CONF_RELAY_NUMBER,
-                    default=default_relay.get(
-                        CONF_RELAY_NUMBER, relay_display_number
-                    ),
-                ): vol.In([1, 2, 3, 4]),
-                vol.Required(
                     CONF_RELAY_DEVICE_TYPE,
-                    default=default_relay.get(
+                    default=existing.get(
                         CONF_RELAY_DEVICE_TYPE, DEVICE_TYPE_DOOR
                     ),
                 ): vol.In([DEVICE_TYPE_DOOR, DEVICE_TYPE_GATE]),
+                vol.Required(
+                    CONF_RELAY_PULSE_DURATION,
+                    default=existing.get(
+                        CONF_RELAY_PULSE_DURATION, default_pulse
+                    ),
+                ): cv.positive_int,
             }
         )
 
@@ -884,65 +904,7 @@ class TwoNIntercomOptionsFlow(config_entries.OptionsFlow):  # type: ignore[misc]
             step_id="relay",
             data_schema=data_schema,
             errors=errors,
-            description_placeholders={"relay_number": str(relay_display_number)},
-        )
-
-    async def async_step_relay_pulse(
-        self, user_input: dict[str, Any] | None = None, relay_index: int = 0
-    ) -> ConfigFlowResult:
-        """Collect pulse duration with the right default for door vs gate."""
-        errors: dict[str, str] = {}
-        relay_count = self._data.get(CONF_RELAY_COUNT, DEFAULT_RELAY_COUNT)
-        existing_relays = self._current_option(CONF_RELAYS, [])
-        pending = self._pending_relay or {}
-        device_type = pending.get(CONF_RELAY_DEVICE_TYPE, DEVICE_TYPE_DOOR)
-
-        if user_input is not None:
-            merged = {**pending, **user_input}
-            self._relays.append(merged)
-            self._pending_relay = None
-
-            if len(self._relays) < relay_count:
-                return await self.async_step_relay(relay_index=len(self._relays))
-
-            self._data[CONF_RELAYS] = self._relays
-            return await self._async_create_entry()
-
-        relay_display_number = relay_index + 1
-        default_relay = (
-            existing_relays[relay_index]
-            if relay_index < len(existing_relays)
-            else {}
-        )
-        # Prefer the previously stored pulse duration when editing an
-        # existing relay; only fall back to the type-aware default for
-        # newly added relays. This preserves manual fine-tuning across
-        # options-flow round trips.
-        type_default = (
-            DEFAULT_GATE_DURATION
-            if device_type == DEVICE_TYPE_GATE
-            else DEFAULT_PULSE_DURATION
-        )
-        default_duration = default_relay.get(
-            CONF_RELAY_PULSE_DURATION, type_default
-        )
-
-        data_schema = vol.Schema(
-            {
-                vol.Required(
-                    CONF_RELAY_PULSE_DURATION, default=default_duration
-                ): cv.positive_int,
-            }
-        )
-
-        return self.async_show_form(
-            step_id="relay_pulse",
-            data_schema=data_schema,
-            errors=errors,
-            description_placeholders={
-                "relay_number": str(relay_display_number),
-                "device_type": str(device_type),
-            },
+            description_placeholders={"relay_number": str(relay_number)},
         )
 
     async def _async_create_entry(self) -> ConfigFlowResult:

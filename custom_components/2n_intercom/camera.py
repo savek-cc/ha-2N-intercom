@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import CameraTransportInfo
+from .api import CameraTransportInfo, TwoNIntercomAPI
 from .const import (
     LIVE_VIEW_MODE_MJPEG,
     LIVE_VIEW_MODE_RTSP,
@@ -34,7 +34,7 @@ def _transport_has_live_view(transport_info: CameraTransportInfo) -> bool:
 
 
 def get_stream_source_for_transport(
-    api,
+    api: TwoNIntercomAPI,
     transport_info: CameraTransportInfo,
 ) -> str | None:
     """Build a stream source URL for the chosen transport.
@@ -47,15 +47,17 @@ def get_stream_source_for_transport(
         return None
 
     if transport_info.selected_mode == LIVE_VIEW_MODE_RTSP:
-        return api.get_rtsp_url_with_credentials()
+        result: str | None = api.get_rtsp_url_with_credentials()
+        return result
 
     if transport_info.selected_mode == LIVE_VIEW_MODE_MJPEG:
-        return api.build_mjpeg_url(
+        url: str = api.build_mjpeg_url(
             width=transport_info.mjpeg_width,
             height=transport_info.mjpeg_height,
             fps=transport_info.mjpeg_fps,
             source=transport_info.source,
         )
+        return url
 
     return None
 
@@ -212,7 +214,7 @@ class TwoNIntercomCamera(
         """Return bytes of camera image, going through the coordinator's cache."""
         return await self.coordinator.async_get_snapshot(width=width, height=height)
 
-    async def stream_source(self) -> str | None:
+    async def stream_source(self) -> str | None:  # type: ignore[override]
         """Return the stream source for RTSP transports.
 
         MJPEG transports are served by ``MjpegCamera`` directly without

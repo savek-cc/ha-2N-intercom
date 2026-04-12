@@ -3,15 +3,15 @@ rules:
   action-setup: done
   appropriate-polling: done
   brands:
-    status: todo
+    status: done
     comment: |
-      Requires a PR to the home-assistant/brands repo with icon/logo
-      assets. Tracked but not yet submitted.
+      Brand assets in custom_components/2n_intercom/brand/ directory
+      per the current custom-integration layout.
   common-modules: done
   config-flow: done
   config-flow-test-coverage: done
   dependency-transparency: done
-  docs-actions: todo
+  docs-actions: done
   docs-high-level-description: done
   docs-installation-instructions: done
   docs-removal-instructions: done
@@ -48,13 +48,13 @@ rules:
     comment: |
       The 2N IP intercom does not broadcast a discoverable mDNS/SSDP service
       that maps to a unique device id, so the integration uses manual setup.
-  docs-data-update: todo
-  docs-examples: todo
-  docs-known-limitations: todo
-  docs-supported-devices: todo
-  docs-supported-functions: todo
-  docs-troubleshooting: todo
-  docs-use-cases: todo
+  docs-data-update: done
+  docs-examples: done
+  docs-known-limitations: done
+  docs-supported-devices: done
+  docs-supported-functions: done
+  docs-troubleshooting: done
+  docs-use-cases: done
   dynamic-devices:
     status: exempt
     comment: |
@@ -81,4 +81,8 @@ rules:
   # Platinum
   async-dependency: done
   inject-websession: done
-  strict-typing: done
+  strict-typing:
+    status: todo
+    comment: |
+      mypy and pyright still report errors on the current tree.
+      Must be resolved before Platinum can be claimed.

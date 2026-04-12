@@ -59,11 +59,6 @@ Validation happens against `system/info` so credential mistakes fail at the form
 - Garage-door-opener style control for gate-type relays
 - Optimistic open/close with configurable duration (the IP Verso has no gate-position feedback)
 
-#### Lock (`lock.py`)
-
-- Backward-compatible legacy fallback used only when no relays are configured
-- `is_locked` prefers cached `switch/status` for relay 1 and only falls back to optimistic state when `switch/caps` confirms relay 1 doesn't exist (transient missing payloads keep the optimistic state instead of flipping)
-
 ### 4. 2N API endpoints in use
 
 The auth scheme for each endpoint is determined by the 2N device's web-UI **Services → HTTP API** settings (per service group). The integration negotiates Basic vs Digest per request — see the **Architecture** section above.
@@ -94,15 +89,15 @@ Registered in `__init__.py` and declared in `services.yaml` with `target.config_
 ### 6. HomeKit integration
 
 - Camera + linked doorbell sensor → **Video Doorbell** accessory in HomeKit
-- Door relay switch → Switch / Lock (depends on bridge filter)
+- Door relay switch → Switch accessory
 - Gate relay cover → **Garage Door Opener** accessory
-- Legacy lock entity → Lock or Garage Door Opener depending on `device_class`
 
 See [HOMEKIT_INTEGRATION.md](HOMEKIT_INTEGRATION.md) for the YAML link snippet that's still needed for the doorbell tile.
 
 ### 7. Translations
 
 - English (`en.json`)
+- German (`de.json`)
 - Czech (`cs.json`)
 
 Both translations cover all config / options / reauth / reconfigure / abort / progress strings, and the new `services` section (`answer_call` and `hangup_call`).
@@ -118,18 +113,14 @@ Both translations cover all config / options / reauth / reconfigure / abort / pr
 
 ### Per configuration
 
-**Camera + doorbell, no relays:**
+**Camera + doorbell, default relays:**
 - `camera.<name>_camera`
 - `binary_sensor.<name>_doorbell`
 - `binary_sensor.<name>_input_1`
 - `binary_sensor.<name>_relay_1_active`
 - `sensor.<name>_sip_registration`
 - `sensor.<name>_call_state`
-- `lock.<name>_lock` (legacy fallback)
-
-**+ 1 door relay:**
-- All of the above (without the legacy lock) plus
-- `switch.<name>_<relay_name>`
+- `switch.<name>_relay_N` (one per auto-discovered door-type relay)
 
 **+ 1 door + 1 gate relay:**
 - Add `cover.<name>_<gate_relay_name>`
@@ -140,10 +131,10 @@ Both translations cover all config / options / reauth / reconfigure / abort / pr
 ## Configuration flow
 
 1. **Add integration** → "2N Intercom"
-2. **Connection step** → host, port, protocol, credentials, SSL verification (validated against `system/info`)
-3. **Device step** → name, camera, doorbell, relay count, optional ringing peer
-4. **Per-relay step** → name, physical relay number, type (door/gate), pulse duration
-5. **Done** → entities created, log listener starts, services available
+2. **Connection step** → host, username, password (protocol and port are auto-detected; validated against `system/info`)
+3. **Device step** → name, camera, doorbell, optional ringing peer
+4. **Done** → entities created, relays auto-discovered, log listener starts, services available
+5. **Options flow** (post-setup) → relay overrides (name, type, pulse), camera transport, polling interval
 
 If credentials later become invalid, HA automatically opens the **reauth** flow. To change connection details without removing the entry, use the **reconfigure** flow from the integration's overflow menu.
 
@@ -210,10 +201,10 @@ End-to-end live verification is done with the standalone scripts under the upstr
 
 ## Statistics (as of 1.1.0)
 
-- **Platforms:** 6 (camera, binary_sensor, sensor, switch, cover, lock)
+- **Platforms:** 5 (camera, binary_sensor, sensor, switch, cover)
 - **APIs:** 11 endpoint families (auth scheme determined by device per service group)
 - **Services:** 2 (`answer_call`, `hangup_call`)
-- **Languages:** 2 (English, Czech)
+- **Languages:** 3 (English, German, Czech)
 - **Tests:** 75 unit tests
 - **HA target:** 2026.4.0+
 

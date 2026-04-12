@@ -46,21 +46,18 @@
       "init": {
         "title": "2N Intercom Options",
         "data": {
-          "door_type": "Door Type (Legacy)",
           "enable_camera": "Enable Camera",
           "enable_doorbell": "Enable Doorbell"
         }
       },
       "device": {
         "title": "2N Intercom Options - Device",
-        "description": "Update device features",
+        "description": "Update device features. Relays are auto-detected from the device — override names and types in the next step.",
         "data": {
           "name": "Name",
           "enable_camera": "Enable Camera",
           "enable_doorbell": "Enable Doorbell",
           "scan_interval": "Polling interval (seconds)",
-          "relay_count": "Number of Relays",
-          "door_type": "Door Type (Legacy)",
           "called_id": "Ringing account (peer)"
         },
         "data_description": {
@@ -68,8 +65,6 @@
           "enable_camera": "Create the camera entity",
           "enable_doorbell": "Create the doorbell entity",
           "scan_interval": "How often the integration polls the device for status (2-300 s). Lower values detect rings faster but increase device load.",
-          "relay_count": "How many relays you want to configure (0-4)",
-          "door_type": "Legacy lock type (door or gate)",
           "called_id": "Select which account should ring. Choose All calls to ring on every button."
         }
       },
@@ -97,37 +92,23 @@
       },
       "relay": {
         "title": "2N Intercom Options - Relay {relay_number}",
-        "description": "Update relay {relay_number}",
+        "description": "Override settings for auto-detected relay {relay_number}. Door strikes typically need ~2000 ms pulse, swing-gate triggers ~15000 ms.",
         "data": {
-          "relay_name": "Relay Name",
           "relay_number": "Relay Number",
-          "relay_device_type": "Device Type"
-        },
-        "data_description": {
-          "relay_name": "Displayed name for this relay",
-          "relay_number": "Physical relay number on the device (1-4)",
-          "relay_device_type": "Door creates a switch, gate creates a cover"
-        }
-      },
-      "relay_pulse": {
-        "title": "2N Intercom Options - Relay {relay_number} pulse",
-        "description": "How long to activate relay {relay_number} ({device_type}). Door strikes typically need ~2000 ms, swing-gate triggers ~15000 ms.",
-        "data": {
+          "relay_name": "Relay Name",
+          "relay_device_type": "Device Type",
           "relay_pulse_duration": "Pulse Duration (milliseconds)"
         },
         "data_description": {
-          "relay_pulse_duration": "Trigger pulse length sent to the relay (ms)"
+          "relay_number": "Physical relay number on the device (auto-detected)",
+          "relay_name": "Displayed name for this relay in Home Assistant",
+          "relay_device_type": "Door creates a switch entity, gate creates a cover entity",
+          "relay_pulse_duration": "Trigger pulse length sent to the relay (ms). Default is the device-configured switchOnDuration."
         }
       }
     }
   },
   "selector": {
-    "door_type": {
-      "options": {
-        "door": "Door",
-        "gate": "Gate"
-      }
-    },
     "live_view_mode": {
       "options": {
         "auto": "Auto (RTSP > MJPEG > snapshots)",
@@ -205,6 +186,9 @@
     },
     "hangup_partial_failure": {
       "message": "Failed to hang up call session(s) {sessions}."
+    },
+    "invalid_hangup_reason": {
+      "message": "Invalid hangup reason '{reason}'. Valid values: {valid}."
     }
   },
   "services": {

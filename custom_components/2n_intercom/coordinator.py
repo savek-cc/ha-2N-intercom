@@ -49,6 +49,10 @@ except ImportError:  # pragma: no cover - test stub fallback
 
 _LOGGER = logging.getLogger(__name__)
 
+# How often to re-fetch /api/switch/caps (relay enable/disable changes).
+# Caps are quasi-static config — no need to poll every 2s update cycle.
+_SWITCH_CAPS_REFRESH_INTERVAL = timedelta(minutes=5)
+
 
 @dataclass
 class TwoNIntercomRuntimeData:
@@ -142,6 +146,7 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
         self._system_info: dict[str, Any] | None = None
         self._phone_status: dict[str, Any] | None = None
         self._switch_caps: dict[str, Any] | None = None
+        self._switch_caps_last_refresh: datetime | None = None
         self._switch_status: dict[str, Any] | None = None
         self._io_caps: dict[str, Any] | None = None
         self._io_status: dict[str, Any] | None = None
@@ -637,13 +642,24 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
                 "async_get_phone_status",
                 "phone status",
             )
-            # switch_caps is refreshed every cycle so the switch platform
-            # can detect newly enabled / disabled relays without a restart.
-            switch_caps = await self._refresh_secondary_cache(
-                "_switch_caps",
-                "async_get_switch_caps",
-                "switch caps",
-            )
+            # switch_caps is quasi-static config (relay enable/disable);
+            # refresh only every _SWITCH_CAPS_REFRESH_INTERVAL to avoid
+            # hammering the device with ~17k extra requests/day.
+            now = datetime.now()
+            if (
+                self._switch_caps is None
+                or self._switch_caps_last_refresh is None
+                or (now - self._switch_caps_last_refresh)
+                >= _SWITCH_CAPS_REFRESH_INTERVAL
+            ):
+                switch_caps = await self._refresh_secondary_cache(
+                    "_switch_caps",
+                    "async_get_switch_caps",
+                    "switch caps",
+                )
+                self._switch_caps_last_refresh = now
+            else:
+                switch_caps = self._switch_caps
             switch_status = await self._refresh_secondary_cache(
                 "_switch_status",
                 "async_get_switch_status",
@@ -814,6 +830,21 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
     def switch_caps(self) -> dict[str, Any]:
         """Return cached switch capabilities."""
         return self._switch_caps or {}
+
+    async def async_refresh_switch_caps(self) -> None:
+        """Force an immediate refresh of switch capabilities.
+
+        Call this after learning that the device configuration changed
+        (e.g. via a log event) to pick up new relays without waiting
+        for the next 5-minute interval.
+        """
+        await self._refresh_secondary_cache(
+            "_switch_caps",
+            "async_get_switch_caps",
+            "switch caps",
+        )
+        self._switch_caps_last_refresh = datetime.now()
+        self.async_set_updated_data(self.data)
 
     @property
     def enabled_switch_numbers(self) -> set[int]:

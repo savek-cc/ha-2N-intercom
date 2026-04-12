@@ -153,11 +153,11 @@ def main() -> int:
         (COMPONENT_DIR / "sensor.py", "SIP / call diagnostic sensors"),
         (COMPONENT_DIR / "switch.py", "Door relay switch platform"),
         (COMPONENT_DIR / "cover.py", "Gate relay cover platform"),
-        (COMPONENT_DIR / "lock.py", "Legacy lock fallback"),
         (COMPONENT_DIR / "services.yaml", "Service definitions"),
         (COMPONENT_DIR / "strings.json", "UI strings"),
         (COMPONENT_DIR / "translations" / "en.json", "English translations"),
         (COMPONENT_DIR / "translations" / "cs.json", "Czech translations"),
+        (COMPONENT_DIR / "translations" / "de.json", "German translations"),
     ]
 
     for filepath, description in required_files:
@@ -171,6 +171,7 @@ def main() -> int:
         COMPONENT_DIR / "strings.json",
         COMPONENT_DIR / "translations" / "en.json",
         COMPONENT_DIR / "translations" / "cs.json",
+        COMPONENT_DIR / "translations" / "de.json",
         BASE_DIR / "hacs.json",
     ]
 
@@ -203,9 +204,9 @@ def main() -> int:
         print("  • answer_call / hangup_call services targeting a config entry")
         print("  • Real-state diagnostic sensors (SIP, call state, IO, relay)")
         print("  • Reauth and reconfigure flows (HA 2026.4+ compliant)")
-        print("  • Switch + cover relay entities with legacy lock fallback")
+        print("  • Switch + cover relay entities")
         print("  • HomeKit bridge auto-discovery")
-        print("  • Czech and English translations")
+        print("  • Czech, English, and German translations")
         return 0
     print("✗ Some checks failed. Please review the output above.")
     return 1

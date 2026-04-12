@@ -8,9 +8,7 @@ CONF_PROTOCOL = "protocol"
 CONF_VERIFY_SSL = "verify_ssl"
 CONF_ENABLE_CAMERA = "enable_camera"
 CONF_ENABLE_DOORBELL = "enable_doorbell"
-CONF_RELAY_COUNT = "relay_count"
 CONF_RELAYS = "relays"
-CONF_DOOR_TYPE = "door_type"
 CONF_CALLED_ID = "called_id"
 CALLED_ID_ALL = "__all__"
 
@@ -36,11 +34,6 @@ CONF_RELAY_PULSE_DURATION = "relay_pulse_duration"
 DEVICE_TYPE_DOOR = "door"
 DEVICE_TYPE_GATE = "gate"
 
-# Legacy door types (for backward compatibility)
-DOOR_TYPE_DOOR = "door"
-DOOR_TYPE_GATE = "gate"
-DOOR_TYPES = [DOOR_TYPE_DOOR, DOOR_TYPE_GATE]
-
 # Protocols
 PROTOCOL_HTTP = "http"
 PROTOCOL_HTTPS = "https"
@@ -53,7 +46,6 @@ DEFAULT_PROTOCOL = PROTOCOL_HTTPS
 DEFAULT_VERIFY_SSL = False
 DEFAULT_ENABLE_CAMERA = True
 DEFAULT_ENABLE_DOORBELL = True
-DEFAULT_RELAY_COUNT = 1
 DEFAULT_SCAN_INTERVAL = 5  # seconds
 SCAN_INTERVAL_MIN = 2  # seconds — below this we hammer the device for no benefit
 SCAN_INTERVAL_MAX = 300  # seconds — 5 minutes is a sane upper bound for ring detection

@@ -104,54 +104,65 @@ class TwoNIntercomCover(TwoNIntercomEntity, CoverEntity):  # type: ignore[misc]
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         """Open the cover (gate)."""
-        # Cancel any pending state task
-        if self._state_task and not self._state_task.done():
-            self._state_task.cancel()
-        
+        self._cancel_state_task()
+
         # Trigger relay to open
         success = await self.coordinator.async_trigger_relay(
             relay=self._relay_number,
             duration=self._pulse_duration,
         )
-        
+
         if success:
-            # Set opening state
             self._is_opening = True
             self._is_closing = False
             self._attr_is_closed = False
             self.async_write_ha_state()
-            
-            # Schedule state change after duration
-            self._state_task = asyncio.create_task(
-                self._async_set_open_after_delay()
-            )
+
+            coro = self._async_set_open_after_delay()
+            if self.hass is not None:
+                self._state_task = self.hass.async_create_task(
+                    coro, eager_start=False,
+                )
+            else:
+                self._state_task = asyncio.create_task(coro)
         else:
             _LOGGER.error("Failed to open cover %s", self._relay_number)
 
     async def async_close_cover(self, **kwargs: Any) -> None:
         """Close the cover (gate)."""
-        # Cancel any pending state task
-        if self._state_task and not self._state_task.done():
-            self._state_task.cancel()
-        
+        self._cancel_state_task()
+
         # Trigger relay to close
         success = await self.coordinator.async_trigger_relay(
             relay=self._relay_number,
             duration=self._pulse_duration,
         )
-        
+
         if success:
-            # Set closing state
             self._is_closing = True
             self._is_opening = False
             self.async_write_ha_state()
-            
-            # Schedule state change after duration
-            self._state_task = asyncio.create_task(
-                self._async_set_closed_after_delay()
-            )
+
+            coro = self._async_set_closed_after_delay()
+            if self.hass is not None:
+                self._state_task = self.hass.async_create_task(
+                    coro, eager_start=False,
+                )
+            else:
+                self._state_task = asyncio.create_task(coro)
         else:
             _LOGGER.error("Failed to close cover %s", self._relay_number)
+
+    def _cancel_state_task(self) -> None:
+        """Cancel any pending delayed state transition task."""
+        if self._state_task and not self._state_task.done():
+            self._state_task.cancel()
+            self._state_task = None
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Clean up when entity is removed."""
+        self._cancel_state_task()
+        await super().async_will_remove_from_hass()
 
     async def _async_set_open_after_delay(self) -> None:
         """Set cover to fully open after delay."""

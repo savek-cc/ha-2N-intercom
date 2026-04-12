@@ -70,10 +70,11 @@ def _get_platforms(entry: ConfigEntry) -> list[str]:
     # the user has explicitly configured a relay as gate-type.
     platforms.append("switch")
 
-    relays = _get_option(entry, CONF_RELAYS, [])
+    relays_raw = _get_option(entry, CONF_RELAYS, [])
+    relays: list[Any] = list(relays_raw) if isinstance(relays_raw, list) else []
     if any(
         r.get(CONF_RELAY_DEVICE_TYPE) == DEVICE_TYPE_GATE
-        for r in (relays or [])
+        for r in relays
         if isinstance(r, dict)
     ):
         platforms.append("cover")
@@ -425,7 +426,7 @@ async def async_setup_entry(
     await hass.config_entries.async_forward_entry_setups(entry, platforms)
     # Remember exactly which platforms were forwarded so unload tears down the
     # same set even if the user later changes options that would shift
-    # _get_platforms() output (e.g. enabling relays flips lock <-> switch+cover).
+    # _get_platforms() output (e.g. adding gate-type relays adds cover).
     entry.runtime_data.loaded_platforms = list(platforms)
 
     entry.async_on_unload(entry.add_update_listener(async_update_options))

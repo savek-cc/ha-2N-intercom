@@ -2,7 +2,22 @@
 
 Home Assistant custom integration for 2N IP Intercom systems with camera, doorbell, relay, call control, and HomeKit support.
 
-Verified against two 2N IP Verso devices running firmware **2.50.0.76.2** — one without RTSP license (MJPEG only) and one with RTSP license and separate RTSP credentials.
+## Supported Devices
+
+| Device | Firmware | Status | Notes |
+|---|---|---|---|
+| **2N IP Verso** | 2.50.0.76.2 | **Verified** | Tested with and without RTSP license. Primary development target. |
+| **2N IP Verso 2.0** | 2.50.x | **Expected to work** | Same API as Verso; untested in this fork |
+| **2N IP Solo** | 2.50.x | **Expected to work** | Single-button variant; same HTTP API family |
+| **2N IP Base** | 2.50.x | **Expected to work** | Same HTTP API family |
+| **2N IP Style** | 2.50.x | **Expected to work** | Same HTTP API family |
+| **2N IP Force** | 2.50.x | **Expected to work** | Same HTTP API family |
+| **2N IP Safety** | 2.50.x | **Untested** | Same API but may lack camera |
+| **2N IP Audio** | 2.50.x | **Untested** | No camera module |
+| Older 2N devices | < 2.40 | **Not supported** | Different API surface |
+| Non-2N intercoms | — | **Not supported** | 2N HTTP API only |
+
+"Expected to work" means the device uses the same `/api/` HTTP API family as the verified target and should function correctly, but has not been tested by the maintainers. If you run one of these devices and can confirm or deny, please open an issue.
 
 ## Features
 
@@ -23,23 +38,22 @@ Verified against two 2N IP Verso devices running firmware **2.50.0.76.2** — on
 ### Door / Gate / Relay control
 - **Switch** entities for door relays (momentary)
 - **Cover** entities for gate relays (garage-door style)
-- **Lock** fallback entity when no relays are configured
-- Up to 4 relays, configurable pulse duration and per-relay name
+- Relays auto-discovered from `/api/switch/caps` — configurable pulse duration and per-relay name via options flow
 - Relay/input states are read from the device (`switch/status`, `io/status`), not optimistic
 - HomeKit accessory mapping per relay type
 
 ### Configuration
-- UI-driven multi-step setup (connection → device → relays)
+- UI-driven two-step setup (connection → device). Protocol and port are auto-detected (HTTPS:443 first, then HTTP:80)
 - **Reauth flow** — when credentials are rejected the integration raises `ConfigEntryAuthFailed`, so HA opens a notification asking the user to re-enter credentials instead of looping on `ConfigEntryNotReady`
-- **Reconfigure flow** — change host/port/credentials/SSL without removing the entry (HA 2024.10+)
-- Options flow for changing device features and per-relay settings
+- **Reconfigure flow** — change host/port/protocol/credentials/SSL without removing the entry (HA 2024.10+)
+- **Options flow** — device features, polling interval, camera transport, and per-relay overrides (name, type, pulse duration). Relays are auto-detected from the device
 - Optional "Ringing account (peer)" filter for multi-button setups (`All calls` matches every button)
 
 ## Capability Matrix
 
 | Category | Status | Notes |
 |---|---|---|
-| **Done** | JPEG snapshot, native MJPEG live view, RTSP stream source (when licensed), push-driven ring detection, polling fallback, relay/cover/lock control with real device state, SIP/call diagnostic sensors, answer/hangup services, reauth and reconfigure flows, HomeKit bridge mapping | All verified against 2N IP Verso 2.50.0.76.2 |
+| **Done** | JPEG snapshot, native MJPEG live view, RTSP stream source (when licensed), push-driven ring detection, polling fallback, relay switch/cover control with real device state, SIP/call diagnostic sensors, answer/hangup services, reauth and reconfigure flows, HomeKit bridge mapping | All verified against 2N IP Verso 2.50.0.76.2 |
 | **Out of fork scope** | Two-way audio, multi-tenant directory UX, keypad workflow, lift control, mass-notify | Not needed for a single-family-house deployment |
 | **License-dependent** | Automation API, Audio Test, NFC, Noise Detection, SMTP, FTP, SNMP, TR069, Lift Control | Only available when the device license exposes them; not planned in this fork |
 
@@ -83,7 +97,7 @@ The integration provides optional **RTSP Username** and **RTSP Password** fields
 - **MJPEG-first camera** built on `homeassistant.components.mjpeg.MjpegCamera`
 - **Static caps cached once** at setup (`switch/caps`, `io/caps`, camera transport); only status endpoints poll on the 5-second interval
 - **`TwoNIntercomEntity`** base class shared by all platforms — single source for `device_info`, `available`, and `_attr_has_entity_name`
-- Platform-based: `camera`, `binary_sensor`, `switch`, `cover`, `lock`, `sensor`
+- Platform-based: `camera`, `binary_sensor`, `switch`, `cover`, `sensor`
 
 ## Manual
 
@@ -125,75 +139,69 @@ All entities, devices, and automation references created by this integration are
 
 ### Initial setup
 
-1. **Connection**
-   - IP address, port, protocol (HTTP/HTTPS), username, password, verify SSL
+The setup wizard has two steps:
 
-2. **Device features**
-   - Display name, enable camera, enable doorbell, number of relays (0-4)
-   - Optional **Ringing account (peer)** to limit doorbell events to one button (`All calls` rings on every button)
+1. **Connection** — host, username, password. Protocol (HTTPS/HTTP) and port (443/80) are auto-detected
+2. **Device** — display name, enable camera, enable doorbell, optional ringing account (peer)
 
-3. **Relays** (one step per relay)
-   - Name, physical relay number (1-4), device type (door / gate), pulse duration (ms)
-   - Door default: 2000 ms — Gate default: 15000 ms
+Relays are **not** configured during initial setup. The integration auto-discovers enabled relays from the device's `/api/switch/caps` endpoint and creates switch entities automatically. To override relay names, types (door/gate), or pulse durations, open the **Options** flow after setup.
 
 ### Initial setup parameters
 
 | Step | Parameter | Type | Default | Description |
 |---|---|---|---|---|
 | Connection | `host` | string | *(required)* | IP address or hostname of the intercom |
-| Connection | `port` | int | 443 (HTTPS) / 80 (HTTP) | HTTP API port |
-| Connection | `protocol` | `http` \| `https` | `https` | Transport protocol |
 | Connection | `username` | string | *(required)* | Device API username |
 | Connection | `password` | string | *(required)* | Device API password |
-| Connection | `verify_ssl` | bool | `false` | Validate the HTTPS certificate (enable only if trusted by HA) |
-| Device | `name` | string | `2N Intercom` | Display name in Home Assistant |
+| Device | `name` | string | *(auto-detected)* | Display name in Home Assistant |
 | Device | `enable_camera` | bool | `true` | Create the camera entity |
 | Device | `enable_doorbell` | bool | `true` | Create the doorbell binary sensor |
-| Device | `relay_count` | 0-4 | 1 | Number of relays to configure |
 | Device | `called_id` | string | `All calls` | Ringing account / peer filter |
-| Relay | `relay_name` | string | `Relay N` | Display name for this relay |
-| Relay | `relay_number` | 1-4 | *(sequential)* | Physical relay number on the device |
-| Relay | `relay_device_type` | `door` \| `gate` | `door` | Door → switch entity, Gate → cover entity |
-| Relay | `relay_pulse_duration` | int (ms) | 2000 (door) / 15000 (gate) | How long the relay stays triggered |
 
 ### Options flow parameters
 
 After initial setup, open the integration's **Options** (Settings → Devices & Services → 2N Intercom → **Configure**) to change behavioral settings without removing the entry. Connection settings are changed through the **Reconfigure** flow instead.
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `name` | string | *(from setup)* | Display name |
-| `enable_camera` | bool | `true` | Toggle camera entity |
-| `enable_doorbell` | bool | `true` | Toggle doorbell entity |
-| `scan_interval` | 2-300 (s) | 5 | Polling interval. Lower = faster ring detection, higher device load |
-| `relay_count` | 0-4 | *(from setup)* | Number of relays |
-| `door_type` | `door` \| `gate` | *(derived)* | Legacy lock device type |
-| `called_id` | string | `All calls` | Ringing account / peer filter |
-| `live_view_mode` | `auto` \| `rtsp` \| `mjpeg` \| `jpeg_only` | `auto` | Camera live view transport. `auto` picks RTSP if licensed and RTSP credentials are set, then MJPEG, then snapshots |
-| `rtsp_username` | string | *(empty)* | RTSP server username (from the 2N RTSP user database, **not** the HTTP API account) |
-| `rtsp_password` | string | *(empty)* | RTSP server password |
-| `camera_source` | `internal` \| `external` | `internal` | Which camera sensor to stream (external = secondary module) |
-| `mjpeg_width` | 160-2592 (px) | 1280 | MJPEG stream width |
-| `mjpeg_height` | 160-2592 (px) | 960 | MJPEG stream height |
-| `mjpeg_fps` | 1-15 | 10 | MJPEG frame rate. Lower values reduce bandwidth |
+The options flow has up to three steps:
+
+1. **Device** — name, feature toggles, polling interval, ringing account
+2. **Camera** *(only when camera is enabled)* — live view mode, RTSP credentials, MJPEG resolution/fps, camera source
+3. **Relay** *(one per auto-detected relay)* — name, device type (door/gate), pulse duration
+
+| Step | Parameter | Type | Default | Description |
+|---|---|---|---|---|
+| Device | `name` | string | *(from setup)* | Display name |
+| Device | `enable_camera` | bool | `true` | Toggle camera entity |
+| Device | `enable_doorbell` | bool | `true` | Toggle doorbell entity |
+| Device | `scan_interval` | 2-300 (s) | 5 | Polling interval. Lower = faster ring detection, higher device load |
+| Device | `called_id` | string | `All calls` | Ringing account / peer filter |
+| Camera | `live_view_mode` | `auto` \| `rtsp` \| `mjpeg` \| `jpeg_only` | `auto` | Camera live view transport. `auto` picks RTSP if licensed and RTSP credentials are set, then MJPEG, then snapshots |
+| Camera | `rtsp_username` | string | *(empty)* | RTSP server username (from the 2N RTSP user database, **not** the HTTP API account) |
+| Camera | `rtsp_password` | string | *(empty)* | RTSP server password |
+| Camera | `camera_source` | `internal` \| `external` | `internal` | Which camera sensor to stream (external = secondary module) |
+| Camera | `mjpeg_width` | 160-2592 (px) | 1280 | MJPEG stream width |
+| Camera | `mjpeg_height` | 160-2592 (px) | 960 | MJPEG stream height |
+| Camera | `mjpeg_fps` | 1-15 | 10 | MJPEG frame rate. Lower values reduce bandwidth |
+| Relay | `relay_name` | string | `Relay N` | Display name for this relay |
+| Relay | `relay_device_type` | `door` \| `gate` | `door` | Door → switch entity, Gate → cover entity |
+| Relay | `relay_pulse_duration` | int (ms) | *(from device)* | How long the relay stays triggered. Default is the device's switchOnDuration |
 
 ### Example: single-family house (door + gate)
 
 ```
-Connection
-  Host: 192.168.2.20
-  Protocol: HTTPS
+Initial setup:
+  Host: 192.0.2.20
   Username: homeassistant
   Password: ****
+  → auto-detects HTTPS:443
 
-Device
   Name: Home Intercom
   Camera: yes
   Doorbell: yes
-  Relays: 2
 
-Relay 1 (Front Door, door, 2000 ms)
-Relay 2 (Driveway Gate, gate, 15000 ms)
+Options flow (after setup):
+  Relay 1 → Front Door, door, 2000 ms
+  Relay 2 → Driveway Gate, gate, 15000 ms
 ```
 
 Resulting entities:
@@ -225,6 +233,33 @@ Example actionable-notification snippet:
     reason: normal
 ```
 
+## Automation Examples
+
+### Blueprint: Doorbell notification with answer/hangup
+
+A ready-to-use blueprint is included at [`blueprints/doorbell_notification_answer_hangup.yaml`](blueprints/doorbell_notification_answer_hangup.yaml). It sends a mobile notification with a camera snapshot and action buttons to answer or hang up the call when the doorbell rings.
+
+To import:
+
+1. Copy the YAML file into your `config/blueprints/automation/2n_intercom/` directory
+2. Reload automations
+3. Create a new automation from the blueprint and fill in your entities
+
+### Quick YAML example: open door on doorbell
+
+```yaml
+automation:
+  - alias: "Auto-open door on ring"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.home_intercom_doorbell
+        to: "on"
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.home_intercom_relay_1
+```
+
 ## 2N API Endpoints Used
 
 The integration negotiates Basic vs Digest per request — see the **Authentication** section above.
@@ -241,6 +276,32 @@ The integration negotiates Basic vs Digest per request — see the **Authenticat
 | `/api/camera/caps` | Discover MJPEG capability + resolutions |
 | `/api/camera/snapshot` (with/without `fps`) | JPEG snapshot + MJPEG live view |
 | RTSP stream | Optional, only when the device licence exposes it |
+
+## Data Updates
+
+The integration uses two data channels:
+
+- **Push channel** — `/api/log/subscribe` + `/api/log/pull` long-poll loop. Delivers doorbell ring events within ~1 second. The listener auto-resubscribes with exponential backoff on failures
+- **Polling fallback** — the coordinator polls status endpoints (`switch/status`, `io/status`, `phone/status`, `call/status`) at the configured interval (default 5 seconds). This keeps ring detection alive when the push channel is degraded
+- **Static caps** — `switch/caps`, `io/caps`, and camera transport info are fetched once at setup and cached. Switch caps are refreshed every 5 minutes to detect relay enable/disable changes
+
+## Use Cases
+
+- **Video doorbell** — camera snapshot + push-driven ring notification via mobile app
+- **Door opening** — trigger relay via switch entity from automations, dashboards, or HomeKit
+- **Gate control** — garage-door-style open/close via cover entity
+- **Call management** — answer or reject incoming calls from automations using the `answer_call` / `hangup_call` services
+- **Multi-button setups** — filter doorbell events by ringing account (peer) to distinguish front door from side entrance
+- **HomeKit bridge** — expose camera as video doorbell, relays as switches/garage doors in Apple Home
+
+## Known Limitations
+
+- **No two-way audio** — the HA camera platform does not support bi-directional audio; the doorbell ring triggers notifications but audio is device-side only
+- **RTSP requires a separate license** — the 2N RTSP server is a paid feature; without it, only MJPEG streaming is available
+- **RTSP credentials are independent** — the RTSP server has its own user database; HTTP API credentials do not work for RTSP
+- **No gate position feedback** — the IP Verso has no gate-position sensor; cover entities use optimistic state transitions
+- **Single camera source** — only one camera source (internal or external) can be active per config entry
+- **Firmware < 2.40 unsupported** — older firmware versions use a different API surface
 
 ## Troubleshooting
 
@@ -284,12 +345,13 @@ custom_components/2n_intercom/
 ├── sensor.py                # SIP registration + call state diagnostic sensors
 ├── switch.py                # Door relay platform
 ├── cover.py                 # Gate relay platform
-├── lock.py                  # Legacy lock fallback
 ├── manifest.json
 ├── services.yaml
 ├── strings.json
+├── icons.json
 └── translations/
     ├── en.json
+    ├── de.json
     └── cs.json
 ```
 

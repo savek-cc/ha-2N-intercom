@@ -891,11 +891,23 @@ class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "camera")
 
-    async def test_device_step_with_relays_advances_to_relay(self) -> None:
+    async def test_device_step_with_detected_relays_advances_to_relay(self) -> None:
+        """When coordinator reports enabled relays, options flow shows relay step."""
         entry = FakeConfigEntry(
             "entry-1",
             {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
         )
+        # Simulate runtime_data with a coordinator that has switch_caps
+        runtime = type("RT", (), {
+            "coordinator": type("C", (), {
+                "switch_caps": {
+                    "switches": [
+                        {"switch": 1, "enabled": True, "switchOnDuration": 5},
+                    ]
+                }
+            })(),
+        })()
+        entry.runtime_data = runtime
         flow = self._make_options_flow(entry)
         result = await flow.async_step_device(
             {
@@ -903,32 +915,32 @@ class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
                 "enable_camera": False,
                 "enable_doorbell": True,
                 "scan_interval": 5,
-                "relay_count": 1,
-                "door_type": "door",
             }
         )
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "relay")
 
-    async def test_options_relay_to_pulse_to_entry(self) -> None:
+    async def test_options_relay_creates_entry(self) -> None:
+        """Relay step with combined fields creates entry directly."""
         entry = FakeConfigEntry(
             "entry-1",
             {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
         )
         flow = self._make_options_flow(entry)
-        flow._data = {"relay_count": 1, "enable_camera": False}
+        flow._data = {"enable_camera": False}
         flow._relays = []
+        flow._detected_relays = [
+            {"switch": 1, "enabled": True, "switchOnDuration": 5},
+        ]
 
-        # Relay step
         result = await flow.async_step_relay(
-            {"relay_name": "Door", "relay_number": 1, "relay_device_type": "door"},
+            {
+                "relay_number": 1,
+                "relay_name": "Door",
+                "relay_device_type": "door",
+                "relay_pulse_duration": 3000,
+            },
             relay_index=0,
-        )
-        self.assertEqual(result["step_id"], "relay_pulse")
-
-        # Pulse step
-        result = await flow.async_step_relay_pulse(
-            {"relay_pulse_duration": 3000}, relay_index=0
         )
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(len(result["data"]["relays"]), 1)
@@ -940,28 +952,14 @@ class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
             {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
         )
         flow = self._make_options_flow(entry)
-        flow._data = {"relay_count": 1}
+        flow._data = {}
         flow._relays = []
+        flow._detected_relays = [
+            {"switch": 1, "enabled": True, "switchOnDuration": 5},
+        ]
         result = await flow.async_step_relay(None, relay_index=0)
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "relay")
-
-    async def test_options_relay_pulse_renders_form(self) -> None:
-        entry = FakeConfigEntry(
-            "entry-1",
-            {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
-        )
-        flow = self._make_options_flow(entry)
-        flow._data = {"relay_count": 1}
-        flow._relays = []
-        flow._pending_relay = {
-            "relay_name": "Gate",
-            "relay_number": 1,
-            "relay_device_type": "gate",
-        }
-        result = await flow.async_step_relay_pulse(None, relay_index=0)
-        self.assertEqual(result["type"], "form")
-        self.assertEqual(result["step_id"], "relay_pulse")
 
     async def test_options_multiple_relays(self) -> None:
         entry = FakeConfigEntry(
@@ -969,28 +967,35 @@ class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
             {"host": "192.0.2.20", "port": 443, "username": "u", "password": "p"},
         )
         flow = self._make_options_flow(entry)
-        flow._data = {"relay_count": 2, "enable_camera": False}
+        flow._data = {"enable_camera": False}
         flow._relays = []
+        flow._detected_relays = [
+            {"switch": 1, "enabled": True, "switchOnDuration": 5},
+            {"switch": 2, "enabled": True, "switchOnDuration": 15},
+        ]
 
-        # First relay
-        await flow.async_step_relay(
-            {"relay_name": "Door", "relay_number": 1, "relay_device_type": "door"},
+        # First relay — should advance to next relay form
+        result = await flow.async_step_relay(
+            {
+                "relay_number": 1,
+                "relay_name": "Door",
+                "relay_device_type": "door",
+                "relay_pulse_duration": 2000,
+            },
             relay_index=0,
         )
-        result = await flow.async_step_relay_pulse(
-            {"relay_pulse_duration": 2000}, relay_index=0
-        )
-        # Should advance to next relay
         self.assertEqual(result["type"], "form")
         self.assertEqual(result["step_id"], "relay")
 
-        # Second relay
-        await flow.async_step_relay(
-            {"relay_name": "Gate", "relay_number": 2, "relay_device_type": "gate"},
+        # Second relay — should create entry
+        result = await flow.async_step_relay(
+            {
+                "relay_number": 2,
+                "relay_name": "Gate",
+                "relay_device_type": "gate",
+                "relay_pulse_duration": 15000,
+            },
             relay_index=1,
-        )
-        result = await flow.async_step_relay_pulse(
-            {"relay_pulse_duration": 15000}, relay_index=1
         )
         self.assertEqual(result["type"], "create_entry")
         self.assertEqual(len(result["data"]["relays"]), 2)
@@ -1007,8 +1012,6 @@ class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
                 "enable_camera": False,
                 "enable_doorbell": False,
                 "scan_interval": 10.0,  # NumberSelector returns float
-                "relay_count": 0,
-                "door_type": "door",
             }
         )
         self.assertEqual(result["type"], "create_entry")
@@ -1027,8 +1030,6 @@ class OptionsFlowTests(unittest.IsolatedAsyncioTestCase):
                 "enable_camera": False,
                 "enable_doorbell": True,
                 "scan_interval": 5,
-                "relay_count": 0,
-                "door_type": "door",
             }
         )
         self.assertEqual(result["type"], "create_entry")
