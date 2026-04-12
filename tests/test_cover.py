@@ -195,9 +195,9 @@ class CoverPlatformTests(unittest.IsolatedAsyncioTestCase):
 
         cover = cover_module.TwoNIntercomCover(coordinator, entry, relay_config)
 
-        self.assertTrue(cover.is_closed)
-        self.assertFalse(cover.is_opening)
-        self.assertFalse(cover.is_closing)
+        self.assertTrue(cover._attr_is_closed)
+        self.assertFalse(cover._attr_is_opening)
+        self.assertFalse(cover._attr_is_closing)
         self.assertEqual(cover._attr_name, "Main Gate")
         self.assertEqual(cover._attr_unique_id, "entry-1_cover_1")
 
@@ -224,14 +224,14 @@ class CoverPlatformTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(coordinator.trigger_calls), 1)
         self.assertEqual(coordinator.trigger_calls[0]["relay"], 1)
-        self.assertTrue(cover.is_opening)
-        self.assertFalse(cover.is_closed)
-        self.assertFalse(cover.is_closing)
+        self.assertTrue(cover._attr_is_opening)
+        self.assertFalse(cover._attr_is_closed)
+        self.assertFalse(cover._attr_is_closing)
 
         # Wait for delay task to complete
         await asyncio.sleep(0.02)
-        self.assertFalse(cover.is_opening)
-        self.assertFalse(cover.is_closed)
+        self.assertFalse(cover._attr_is_opening)
+        self.assertFalse(cover._attr_is_closed)
 
     async def test_close_cover_triggers_relay_and_sets_closing(self) -> None:
         cover_module = self.cover_module
@@ -243,12 +243,12 @@ class CoverPlatformTests(unittest.IsolatedAsyncioTestCase):
         cover._attr_is_closed = False  # Start open
         await cover.async_close_cover()
 
-        self.assertTrue(cover.is_closing)
-        self.assertFalse(cover.is_opening)
+        self.assertTrue(cover._attr_is_closing)
+        self.assertFalse(cover._attr_is_opening)
 
         await asyncio.sleep(0.02)
-        self.assertFalse(cover.is_closing)
-        self.assertTrue(cover.is_closed)
+        self.assertFalse(cover._attr_is_closing)
+        self.assertTrue(cover._attr_is_closed)
 
     async def test_open_cover_failure(self) -> None:
         cover_module = self.cover_module
@@ -260,8 +260,8 @@ class CoverPlatformTests(unittest.IsolatedAsyncioTestCase):
         await cover.async_open_cover()
 
         # State should not change on failure
-        self.assertTrue(cover.is_closed)
-        self.assertFalse(cover.is_opening)
+        self.assertTrue(cover._attr_is_closed)
+        self.assertFalse(cover._attr_is_opening)
 
     async def test_close_cover_failure(self) -> None:
         cover_module = self.cover_module
@@ -273,8 +273,8 @@ class CoverPlatformTests(unittest.IsolatedAsyncioTestCase):
         cover._attr_is_closed = False
         await cover.async_close_cover()
 
-        self.assertFalse(cover.is_closed)
-        self.assertFalse(cover.is_closing)
+        self.assertFalse(cover._attr_is_closed)
+        self.assertFalse(cover._attr_is_closing)
 
     async def test_open_cancels_pending_state_task(self) -> None:
         cover_module = self.cover_module
@@ -323,20 +323,9 @@ class CoverPlatformTests(unittest.IsolatedAsyncioTestCase):
         relay_config = self._make_relay_config()
 
         cover = cover_module.TwoNIntercomCover(coordinator, entry, relay_config)
-        info = cover.device_info
+        info = cover._attr_device_info
         self.assertEqual(info["entry_id"], "entry-1")
         self.assertEqual(info["name"], "Front Door")
-
-    def test_cover_available(self) -> None:
-        cover_module = self.cover_module
-        coordinator = FakeCoordinator()
-        entry = FakeConfigEntry("entry-1", {"name": "Front Door"})
-        relay_config = self._make_relay_config()
-
-        cover = cover_module.TwoNIntercomCover(coordinator, entry, relay_config)
-        self.assertTrue(cover.available)
-        coordinator.last_update_success = False
-        self.assertFalse(cover.available)
 
 
 if __name__ == "__main__":

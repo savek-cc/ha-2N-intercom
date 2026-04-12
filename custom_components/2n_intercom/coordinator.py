@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta, datetime
 import logging
@@ -35,6 +36,7 @@ from .const import (
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
+    from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 
 # ConfigEntryAuthFailed lives in homeassistant.exceptions but the test stubs
 # don't ship it. Import lazily so module load works in any HA shape; raising
@@ -500,7 +502,9 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
         log_level: str = "debug",
     ) -> dict[str, Any]:
         """Refresh a cached secondary endpoint, returning the cached value on failure."""
-        fetcher = getattr(self.api, method_name, None)
+        fetcher: Callable[[], Awaitable[dict[str, Any]]] | None = getattr(
+            self.api, method_name, None
+        )
         if fetcher is None or not callable(fetcher):
             _LOGGER.debug(
                 "API does not expose %s; using cached %s",
@@ -564,10 +568,12 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
             )
 
         if self._camera_transport_info is None:
-            fetcher = getattr(self.api, "async_get_camera_transport_info", None)
-            if callable(fetcher):
+            cam_fetcher: Callable[..., Awaitable[CameraTransportInfo]] | None = getattr(
+                self.api, "async_get_camera_transport_info", None
+            )
+            if callable(cam_fetcher):
                 try:
-                    self._camera_transport_info = await fetcher(
+                    self._camera_transport_info = await cam_fetcher(
                         **self._camera_transport_overrides()
                     )
                 except Exception as err:  # pylint: disable=broad-except
@@ -907,18 +913,25 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
             return self._camera_transport_info
         return self.api.camera_transport_info
 
-    def get_device_info(self, entry_id: str, name: str) -> dict[str, Any]:
+    def get_device_info(self, entry_id: str, name: str) -> DeviceInfo:
         """Build device info for entities."""
+        # Import here to support both real HA and lightweight test stubs.
+        from homeassistant.helpers.device_registry import (  # noqa: C0415
+            CONNECTION_NETWORK_MAC as _MAC,
+            DeviceInfo as _DeviceInfo,
+        )
+
         system_info = self.system_info
         model = system_info.get("variant") or system_info.get("deviceName") or "IP Intercom"
         sw_version = system_info.get("swVersion") or "1.0.0"
-        info: dict[str, Any] = {
-            "identifiers": {(DOMAIN, entry_id)},
-            "name": name,
-            "manufacturer": "2N",
-            "model": model,
-            "sw_version": sw_version,
-        }
+
+        info = _DeviceInfo(
+            identifiers={(DOMAIN, entry_id)},
+            name=name,
+            manufacturer="2N",
+            model=model,
+            sw_version=sw_version,
+        )
         serial = system_info.get("serialNumber")
         if serial:
             info["serial_number"] = str(serial)
@@ -927,7 +940,7 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
             info["hw_version"] = str(hw_version)
         mac = system_info.get("macAddr")
         if mac:
-            info["connections"] = {("mac", str(mac))}
+            info["connections"] = {(_MAC, str(mac))}
         return info
 
     async def async_trigger_relay(

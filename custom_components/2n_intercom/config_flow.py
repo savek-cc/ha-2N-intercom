@@ -348,8 +348,11 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
         self, entry_data: Mapping[str, Any]
     ) -> ConfigFlowResult:
         """Handle reauthentication when stored credentials stop working."""
-        self._reauth_entry = self.hass.config_entries.async_get_entry(
-            self.context["entry_id"]
+        entry_id: str | None = self.context.get("entry_id")
+        self._reauth_entry = (
+            self.hass.config_entries.async_get_entry(entry_id)
+            if entry_id
+            else None
         )
         if self._reauth_entry is not None:
             self._data = dict(self._reauth_entry.data)
@@ -423,8 +426,11 @@ class TwoNIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Allow the user to change host/port/credentials without dropping the entry."""
-        self._reconfigure_entry = self.hass.config_entries.async_get_entry(
-            self.context["entry_id"]
+        entry_id = self.context.get("entry_id")
+        self._reconfigure_entry = (
+            self.hass.config_entries.async_get_entry(entry_id)
+            if entry_id
+            else None
         )
         if self._reconfigure_entry is not None:
             self._data = dict(self._reconfigure_entry.data)

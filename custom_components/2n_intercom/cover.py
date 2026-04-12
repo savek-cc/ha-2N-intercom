@@ -87,24 +87,9 @@ class TwoNIntercomCover(TwoNIntercomEntity, CoverEntity):  # type: ignore[misc]
         self._attr_name = self._relay_name
         self._attr_unique_id = f"{config_entry.entry_id}_cover_{self._relay_number}"
         self._attr_is_closed = True
-        self._is_opening = False
-        self._is_closing = False
+        self._attr_is_opening = False
+        self._attr_is_closing = False
         self._state_task: asyncio.Task[None] | None = None
-
-    @property
-    def is_closed(self) -> bool:
-        """Return if the cover is closed."""
-        return bool(self._attr_is_closed)
-
-    @property
-    def is_opening(self) -> bool:
-        """Return if the cover is opening."""
-        return self._is_opening
-
-    @property
-    def is_closing(self) -> bool:
-        """Return if the cover is closing."""
-        return self._is_closing
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         """Open the cover (gate)."""
@@ -117,8 +102,8 @@ class TwoNIntercomCover(TwoNIntercomEntity, CoverEntity):  # type: ignore[misc]
         )
 
         if success:
-            self._is_opening = True
-            self._is_closing = False
+            self._attr_is_opening = True
+            self._attr_is_closing = False
             self._attr_is_closed = False
             self.async_write_ha_state()
 
@@ -143,8 +128,8 @@ class TwoNIntercomCover(TwoNIntercomEntity, CoverEntity):  # type: ignore[misc]
         )
 
         if success:
-            self._is_closing = True
-            self._is_opening = False
+            self._attr_is_closing = True
+            self._attr_is_opening = False
             self.async_write_ha_state()
 
             coro = self._async_set_closed_after_delay()
@@ -174,7 +159,7 @@ class TwoNIntercomCover(TwoNIntercomEntity, CoverEntity):  # type: ignore[misc]
             # Wait for operation duration (convert milliseconds to seconds)
             await asyncio.sleep(self._pulse_duration / 1000)
             
-            self._is_opening = False
+            self._attr_is_opening = False
             self._attr_is_closed = False
             self.async_write_ha_state()
         except asyncio.CancelledError:
@@ -187,7 +172,7 @@ class TwoNIntercomCover(TwoNIntercomEntity, CoverEntity):  # type: ignore[misc]
             # Wait for operation duration (convert milliseconds to seconds)
             await asyncio.sleep(self._pulse_duration / 1000)
 
-            self._is_closing = False
+            self._attr_is_closing = False
             self._attr_is_closed = True
             self.async_write_ha_state()
         except asyncio.CancelledError:

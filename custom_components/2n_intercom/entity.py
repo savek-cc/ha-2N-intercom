@@ -8,7 +8,7 @@ already pulls in everything we need (see ``camera.py``).
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -31,26 +31,10 @@ class TwoNIntercomEntity(CoordinatorEntity[TwoNIntercomCoordinator]):  # type: i
         """Initialise the entity with its config entry."""
         super().__init__(coordinator)
         self._config_entry = config_entry
-
-    @property
-    def _entry_display_name(self) -> str:
-        """Return the user-facing device name from the config entry."""
-        name: str = self._config_entry.options.get(
+        name: str = config_entry.options.get(
             "name",
-            self._config_entry.data.get("name", "2N Intercom"),
+            config_entry.data.get("name", "2N Intercom"),
         )
-        return name
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device information for the integration device."""
-        result: dict[str, Any] = self.coordinator.get_device_info(
-            self._config_entry.entry_id, self._entry_display_name
+        self._attr_device_info = coordinator.get_device_info(
+            config_entry.entry_id, name
         )
-        return result
-
-    @property
-    def available(self) -> bool:
-        """Return whether the entity is available."""
-        available: bool = self.coordinator.last_update_success
-        return available

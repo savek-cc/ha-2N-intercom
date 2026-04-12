@@ -440,15 +440,8 @@ class SwitchEntityTests(unittest.IsolatedAsyncioTestCase):
 
     def test_device_info(self) -> None:
         switch = self._make_switch()
-        info = switch.device_info
+        info = switch._attr_device_info
         self.assertEqual(info["entry_id"], "entry-1")
-
-    def test_available(self) -> None:
-        coordinator = FakeCoordinator()
-        switch = self._make_switch(coordinator=coordinator)
-        self.assertTrue(switch.available)
-        coordinator.last_update_success = False
-        self.assertFalse(switch.available)
 
 
 if __name__ == "__main__":

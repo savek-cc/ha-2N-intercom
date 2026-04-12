@@ -293,19 +293,19 @@ class CameraStreamSourceTests(unittest.IsolatedAsyncioTestCase):
 
         for _, transport_info, expected_features, expected_source in cases:
             camera_entity, _ = self._make_camera_entity(transport_info)
-            self.assertEqual(camera_entity.supported_features, expected_features)
+            self.assertEqual(camera_entity._attr_supported_features, expected_features)
             self.assertIsInstance(
-                camera_entity.supported_features, self.camera_module.CameraEntityFeature
+                camera_entity._attr_supported_features, self.camera_module.CameraEntityFeature
             )
             if expected_features:
                 self.assertIn(
                     self.camera_module.CameraEntityFeature.STREAM,
-                    camera_entity.supported_features,
+                    camera_entity._attr_supported_features,
                 )
             else:
                 self.assertNotIn(
                     self.camera_module.CameraEntityFeature.STREAM,
-                    camera_entity.supported_features,
+                    camera_entity._attr_supported_features,
                 )
             self.assertEqual(await camera_entity.stream_source(), expected_source)
 

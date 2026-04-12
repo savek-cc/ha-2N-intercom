@@ -6,7 +6,7 @@ from typing import Any
 
 from typing import TYPE_CHECKING
 
-from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.components.camera import CameraEntityFeature
 from homeassistant.components.mjpeg import MjpegCamera
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -112,6 +112,10 @@ class TwoNIntercomCamera(
 
     _attr_has_entity_name = True
     _attr_translation_key = "camera"
+    _attr_is_recording = False
+    _attr_motion_detection_enabled = False
+    _attr_brand = "2N"
+    _attr_model = "IP Intercom"
 
     def __init__(
         self,
@@ -161,44 +165,21 @@ class TwoNIntercomCamera(
 
         self._config_entry = config_entry
         self._transport_info = transport_info
+
+        name = config_entry.options.get(
+            "name",
+            config_entry.data.get("name", "2N Intercom"),
+        )
+        self._attr_device_info = coordinator.get_device_info(
+            config_entry.entry_id, name
+        )
+        self._attr_supported_features = get_supported_features_for_transport(
+            transport_info
+        )
         # Set frame interval from configured MJPEG FPS so the still-stream
         # approach produces a comparable frame rate to a native MJPEG proxy.
         if transport_info.mjpeg_fps and transport_info.mjpeg_fps > 0:
             self._attr_frame_interval = 1.0 / transport_info.mjpeg_fps
-
-    @property
-    def device_info(self) -> dict[str, Any]:
-        """Return device information about this camera."""
-        name = self._config_entry.options.get(
-            "name",
-            self._config_entry.data.get("name", "2N Intercom"),
-        )
-        return self.coordinator.get_device_info(self._config_entry.entry_id, name)
-
-    @property
-    def is_recording(self) -> bool:
-        """Return true if the device is recording."""
-        return False
-
-    @property
-    def motion_detection_enabled(self) -> bool:
-        """Return the camera motion detection status."""
-        return False
-
-    @property
-    def brand(self) -> str:
-        """Return the camera brand."""
-        return "2N"
-
-    @property
-    def model(self) -> str:
-        """Return the camera model."""
-        return "IP Intercom"
-
-    @property
-    def supported_features(self) -> CameraEntityFeature:
-        """Return supported features based on the selected live-view transport."""
-        return get_supported_features_for_transport(self.coordinator.camera_transport_info)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -257,8 +238,3 @@ class TwoNIntercomCamera(
         if transport_info.selected_mode != LIVE_VIEW_MODE_RTSP:
             return None
         return get_stream_source_for_transport(self.coordinator.api, transport_info)
-
-    @property
-    def available(self) -> bool:
-        """Return True if entity is available."""
-        return self.coordinator.last_update_success

@@ -52,6 +52,13 @@ def _install_homeassistant_stubs() -> None:
     sys.modules["homeassistant.helpers.update_coordinator"] = update_coordinator
     ensure_package("homeassistant.helpers")
 
+    device_registry = types.ModuleType("homeassistant.helpers.device_registry")
+    CONNECTION_NETWORK_MAC = "mac"
+    DeviceInfo = dict
+    device_registry.CONNECTION_NETWORK_MAC = CONNECTION_NETWORK_MAC
+    device_registry.DeviceInfo = DeviceInfo
+    sys.modules["homeassistant.helpers.device_registry"] = device_registry
+
 
 def load_coordinator_module():
     install_api_stubs()

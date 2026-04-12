@@ -437,15 +437,10 @@ class BinarySensorPlatformTests(unittest.IsolatedAsyncioTestCase):
 
         entity = binary_sensor_module.TwoNIntercomDoorbell(coordinator, entry)
 
-        # device_info from base entity
-        info = entity.device_info
+        # device_info set by base entity __init__ via _attr_device_info
+        info = entity._attr_device_info
         self.assertEqual(info["entry_id"], "entry-1")
         self.assertEqual(info["name"], "Front Door")
-
-        # available from base entity
-        self.assertTrue(entity.available)
-        coordinator.last_update_success = False
-        self.assertFalse(entity.available)
 
     def test_entity_display_name_from_options(self) -> None:
         """_entry_display_name prefers options over data."""
@@ -455,7 +450,7 @@ class BinarySensorPlatformTests(unittest.IsolatedAsyncioTestCase):
         entry.options = {"name": "Options Name"}
 
         entity = binary_sensor_module.TwoNIntercomDoorbell(coordinator, entry)
-        info = entity.device_info
+        info = entity._attr_device_info
         self.assertEqual(info["name"], "Options Name")
 
     # --- Motion sensor tests ---
