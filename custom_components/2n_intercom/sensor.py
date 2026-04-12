@@ -6,7 +6,10 @@ from typing import Any
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import EntityCategory
+try:
+    from homeassistant.const import EntityCategory
+except ImportError:  # pragma: no cover — test stub compat
+    from homeassistant.helpers.entity import EntityCategory  # type: ignore[no-redef,assignment,attr-defined]
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import TwoNIntercomCoordinator, TwoNIntercomRuntimeData
@@ -36,15 +39,21 @@ async def async_setup_entry(
     )
 
 
-class _TwoNIntercomDiagnosticSensor(TwoNIntercomEntity, SensorEntity):
+class _TwoNIntercomDiagnosticSensor(TwoNIntercomEntity, SensorEntity):  # type: ignore[misc]
     """Base class for diagnostic sensors.
 
     Subclasses set ``_attr_translation_key`` (matched against
     ``entity.sensor.<key>.name`` in ``strings.json``) so the visible
     entity name is localised by HA, per the entity-translations rule.
+
+    Disabled by default per the ``entity-disabled-by-default`` rule:
+    diagnostic/technical telemetry should not clutter the default entity
+    list. Users who need SIP registration or call-state data can enable
+    them from the entity registry.
     """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self,
@@ -91,7 +100,7 @@ class TwoNIntercomSipRegistrationStatusSensor(_TwoNIntercomDiagnosticSensor):
         return "unregistered"
 
     @property
-    def state(self) -> str:
+    def native_value(self) -> str:
         """Return the registration status."""
         return self._derive_state(self.coordinator.phone_status)
 
@@ -116,8 +125,13 @@ class TwoNIntercomSipRegistrationStatusSensor(_TwoNIntercomDiagnosticSensor):
         }
 
 
-class TwoNIntercomCallStateSensor(_TwoNIntercomDiagnosticSensor):
-    """Representation of the current call state."""
+class TwoNIntercomCallStateSensor(TwoNIntercomEntity, SensorEntity):  # type: ignore[misc]
+    """Representation of the current call state.
+
+    Promoted to a normal (non-diagnostic) entity because call state is
+    core intercom functionality — users automate on ringing/active/idle
+    transitions (e.g. "stream camera to TV when call is active").
+    """
 
     _attr_translation_key = "call_state"
 
@@ -126,13 +140,15 @@ class TwoNIntercomCallStateSensor(_TwoNIntercomDiagnosticSensor):
         coordinator: TwoNIntercomCoordinator,
         config_entry: ConfigEntry,
     ) -> None:
-        super().__init__(coordinator, config_entry, "call_state")
+        super().__init__(coordinator, config_entry)
+        self._attr_unique_id = f"{config_entry.entry_id}_call_state"
 
     @property
-    def state(self) -> str:
+    def native_value(self) -> str:
         """Return the current call state."""
-        if self.coordinator.call_state:
-            return self.coordinator.call_state
+        call_state: str | None = self.coordinator.call_state
+        if call_state:
+            return call_state
         if self.coordinator.active_session_id:
             return "active"
         return "idle"
