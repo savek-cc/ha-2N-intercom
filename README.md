@@ -156,6 +156,7 @@ Relays are **not** configured during initial setup. The integration auto-discove
 | Device | `name` | string | *(auto-detected)* | Display name in Home Assistant |
 | Device | `enable_camera` | bool | `true` | Create the camera entity |
 | Device | `enable_doorbell` | bool | `true` | Create the doorbell binary sensor |
+| Device | `ring_on_keypress` | bool | `true` | Ring on physical button press (`KeyPressed` event), even when the press does not start a SIP call |
 | Device | `called_id` | string | `All calls` | Ringing account / peer filter |
 
 ### Options flow parameters
@@ -173,6 +174,7 @@ The options flow has up to three steps:
 | Device | `name` | string | *(from setup)* | Display name |
 | Device | `enable_camera` | bool | `true` | Toggle camera entity |
 | Device | `enable_doorbell` | bool | `true` | Toggle doorbell entity |
+| Device | `ring_on_keypress` | bool | `true` | Ring on physical button press (`KeyPressed` event), even when the press does not start a SIP call. The `called_id` filter does not apply to button presses |
 | Device | `scan_interval` | 2-600 (s) | 60 | Backup polling interval. Events deliver real-time updates; polling only runs as a safety net |
 | Device | `called_id` | string | `All calls` | Ringing account / peer filter |
 | Camera | `live_view_mode` | `auto` \| `rtsp` \| `mjpeg` \| `jpeg_only` | `auto` | Camera live view transport. `auto` picks RTSP if licensed and RTSP credentials are set, then MJPEG, then snapshots |

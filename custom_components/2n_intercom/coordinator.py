@@ -30,6 +30,7 @@ from .const import (
     CONF_MJPEG_HEIGHT,
     CONF_MJPEG_WIDTH,
     DEFAULT_LIVE_VIEW_MODE,
+    DEFAULT_RING_ON_KEYPRESS,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
@@ -119,6 +120,7 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
         scan_interval: int = DEFAULT_SCAN_INTERVAL,
         called_id: str | None = None,
         config_entry: ConfigEntry | None = None,
+        ring_on_keypress: bool = DEFAULT_RING_ON_KEYPRESS,
     ) -> None:
         """Initialize the coordinator."""
         # HA 2024.10+ accepts config_entry kwarg; pass when available so log
@@ -166,6 +168,9 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
         self._system_caps: dict[str, str] = {}
         self._motion_detected = False
         self._last_motion_time: datetime | None = None
+        self._ring_on_keypress = bool(ring_on_keypress)
+        self._last_key_pressed: str | None = None
+        self._ring_pulse_clear_handle: asyncio.TimerHandle | None = None
 
     @staticmethod
     def _normalize_peer(peer: str | None) -> str | None:
@@ -270,6 +275,54 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
             self._motion_detected = False
             return True
         return False
+
+    def _process_key_pressed_event(self, params: dict[str, Any]) -> bool:
+        """Handle a KeyPressed log event (physical button press).
+
+        A button press is a doorbell ring even when it never becomes a SIP
+        call — a device with an empty directory (no call destination) emits
+        only ``KeyPressed``. The ``called_id`` peer filter cannot apply here
+        because there is no call, so every button press rings; installs that
+        need per-button filtering should disable ``ring_on_keypress`` and
+        rely on call events instead.
+        """
+        if not self._ring_on_keypress or not isinstance(params, dict):
+            return False
+        key = str(params.get("key") or "").strip()
+        self._last_key_pressed = key or None
+        self._ring_detected = True
+        self._last_ring_time = datetime.now()
+        self._ring_pulse_until = self._last_ring_time + timedelta(
+            seconds=DOORBELL_PULSE_DURATION
+        )
+        self._schedule_ring_pulse_clear()
+        return True
+
+    def _schedule_ring_pulse_clear(self) -> None:
+        """Arm a one-shot timer that ends the ring pulse.
+
+        Call-state rings are cleared by the follow-up terminal call event,
+        but a ``KeyPressed`` ring has no such counterpart — without this
+        timer the doorbell entity would stay ``on`` until the next poll
+        cycle (up to ``scan_interval`` seconds).
+        """
+        if self._ring_pulse_clear_handle is not None:
+            self._ring_pulse_clear_handle.cancel()
+
+        def _clear() -> None:
+            self._ring_pulse_clear_handle = None
+            if self._ring_pulse_until is not None and datetime.now() < self._ring_pulse_until:
+                return  # a newer pulse superseded this timer
+            self._ring_detected = False
+            self._ring_pulse_until = None
+            if hasattr(self, "async_update_listeners"):
+                self.async_update_listeners()
+
+        loop = getattr(self.hass, "loop", None)
+        if loop is not None:
+            self._ring_pulse_clear_handle = loop.call_later(
+                DOORBELL_PULSE_DURATION + 0.1, _clear
+            )
 
     def _process_switch_state_event(self, params: dict[str, Any]) -> bool:
         """Handle a SwitchStateChanged log event.
@@ -405,6 +458,9 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
         if event_name == "MotionDetected":
             return self._process_motion_event(event)
 
+        if event_name == "KeyPressed":
+            return self._process_key_pressed_event(event.get("params") or {})
+
         if event_name == "SwitchStateChanged":
             return self._process_switch_state_event(event.get("params") or {})
         if event_name == "InputChanged":
@@ -529,26 +585,34 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
             # so this does not become a busy-loop on the success path.
             await asyncio.sleep(0)
 
+    def _log_event_names(self) -> list[str]:
+        """Return the log-event names to subscribe to for this device."""
+        log_events = [
+            "CallStateChanged",
+            "CallSessionStateChanged",
+            "SwitchStateChanged",
+            "InputChanged",
+            "OutputChanged",
+            "RegistrationStateChanged",
+            "ConfigurationChanged",
+            "CapabilitiesChanged",
+            "DeviceState",
+        ]
+        if self.motion_detection_available:
+            log_events.append("MotionDetected")
+        if self._ring_on_keypress:
+            log_events.append("KeyPressed")
+        return log_events
+
     async def _async_log_listener_loop(self) -> None:
         """Subscribe to call log events with resilient retry/backoff."""
         backoff = LOG_LISTENER_INITIAL_BACKOFF
         while not self._log_listener_stopped:
             subscription_id: int | None = None
             try:
-                log_events = [
-                    "CallStateChanged",
-                    "CallSessionStateChanged",
-                    "SwitchStateChanged",
-                    "InputChanged",
-                    "OutputChanged",
-                    "RegistrationStateChanged",
-                    "ConfigurationChanged",
-                    "CapabilitiesChanged",
-                    "DeviceState",
-                ]
-                if self.motion_detection_available:
-                    log_events.append("MotionDetected")
-                subscription_id = await self.api.async_subscribe_log(log_events)
+                subscription_id = await self.api.async_subscribe_log(
+                    self._log_event_names()
+                )
             except Exception as err:  # pylint: disable=broad-except
                 _LOGGER.debug("Log subscription failed: %s", err)
 
@@ -626,6 +690,9 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
     async def async_stop_log_listener(self) -> None:
         """Stop the background log-listener task and unsubscribe active channel."""
         self._log_listener_stopped = True
+        if self._ring_pulse_clear_handle is not None:
+            self._ring_pulse_clear_handle.cancel()
+            self._ring_pulse_clear_handle = None
         subscription_id = self._log_subscription_id
         task = self._log_listener_task
         self._log_listener_task = None
@@ -942,6 +1009,11 @@ class TwoNIntercomCoordinator(DataUpdateCoordinator[TwoNIntercomData]):  # type:
     def last_ring_time(self) -> datetime | None:
         """Return last ring timestamp."""
         return self._last_ring_time
+
+    @property
+    def last_key_pressed(self) -> str | None:
+        """Return the key name from the most recent KeyPressed event."""
+        return self._last_key_pressed
 
     @property
     def caller_info(self) -> dict[str, Any]:
