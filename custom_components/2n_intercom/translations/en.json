@@ -22,12 +22,14 @@
           "name": "Name",
           "enable_camera": "Enable Camera",
           "enable_doorbell": "Enable Doorbell",
+          "ring_on_keypress": "Ring on button press",
           "called_id": "Ringing account (peer)"
         },
         "data_description": {
           "name": "Displayed name in Home Assistant",
           "enable_camera": "Create the camera entity for snapshots and streaming",
           "enable_doorbell": "Create the doorbell entity for ring detection",
+          "ring_on_keypress": "Treat a physical button press (KeyPressed event) as a doorbell ring, even when the press does not start a SIP call — required for devices with an empty directory. Note: the ringing-account filter does not apply to button presses.",
           "called_id": "Select which account should ring. Choose All calls to ring on every button."
         }
       }
@@ -47,7 +49,8 @@
         "title": "2N Intercom Options",
         "data": {
           "enable_camera": "Enable Camera",
-          "enable_doorbell": "Enable Doorbell"
+          "enable_doorbell": "Enable Doorbell",
+          "ring_on_keypress": "Ring on button press"
         }
       },
       "device": {
@@ -57,6 +60,7 @@
           "name": "Name",
           "enable_camera": "Enable Camera",
           "enable_doorbell": "Enable Doorbell",
+          "ring_on_keypress": "Ring on button press",
           "scan_interval": "Backup polling interval (seconds)",
           "called_id": "Ringing account (peer)"
         },
@@ -64,6 +68,7 @@
           "name": "Displayed name in Home Assistant",
           "enable_camera": "Create the camera entity",
           "enable_doorbell": "Create the doorbell entity",
+          "ring_on_keypress": "Treat a physical button press (KeyPressed event) as a doorbell ring, even when the press does not start a SIP call — required for devices with an empty directory. Note: the ringing-account filter does not apply to button presses.",
           "scan_interval": "Backup polling interval (2-600 s). Events deliver real-time updates; polling only runs as a safety net. Default 60 s is fine for most setups.",
           "called_id": "Select which account should ring. Choose All calls to ring on every button."
         }

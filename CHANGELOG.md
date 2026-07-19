@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Ring on button press (KeyPressed events)
+- The doorbell binary sensor now also triggers on the device's `KeyPressed` log event — a physical button press rings even when it never becomes a SIP call. Devices with an empty directory (no call destination configured for the button) previously produced no ring at all, because ring detection was exclusively call-state driven
+- New `ring_on_keypress` option (initial setup + options flow, default **on**) controls the behavior; disable it to keep strictly call-based ring detection (for example on multi-button installs that rely on the `called_id` peer filter, which cannot apply to button presses)
+- `KeyPressed` is only added to the log subscription when the option is enabled
+- The ring pulse now clears itself via a one-shot timer — a keypress ring has no terminal call event to end it, so without the timer the sensor would stay `on` until the next backup poll
+- `last_key_pressed` exposed as an extra state attribute on the doorbell entity
+- Translations updated (EN, CS, DE)
+
 ## 1.3.1 - 2026-04-12
 
 ### Documentation sync and quality scale
